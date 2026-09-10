@@ -88,6 +88,7 @@ enum FocusReducer {
             guard state.canStartSession else { break }
             let session = makeSession(request, state: state, now: now, context: context, config: config)
             state.phase = .session(session)
+            state.frontmostSince = now
             state.statusMessage = nil
             effects.append(.log(LogEvent(
                 startedPayload(for: session), id: context.newID(), timestamp: now
@@ -105,7 +106,9 @@ enum FocusReducer {
                   session.kind == .open,
                   session.extensionsUsed == 0 else { break }
             var extended = session
-            let base = max(session.plannedEnd ?? now, now)
+            // Ten minutes total, measured from the original end: answering the panel a
+            // little late must not buy extra time (3.2).
+            let base = session.plannedEnd ?? now
             extended.plannedEnd = base.addingTimeInterval(config.openSessionExtension)
             extended.extensionsUsed = 1
             state.phase = .session(extended)
@@ -122,7 +125,7 @@ enum FocusReducer {
 
         case .convertToFullRequested(let request):
             guard let open = state.phase.session, open.kind == .open else { break }
-            var finished = open
+            var finished = creditingCurrentApp(open, state: state, now: now, config: config)
             finished.endedAt = now
             finished.outcome = .converted
             effects.append(.log(LogEvent(
@@ -130,6 +133,18 @@ enum FocusReducer {
                 id: context.newID(),
                 timestamp: now
             )))
+            // What the open session actually used is the whole point of converting.
+            if !finished.appsUsed.isEmpty || !finished.domainsVisited.isEmpty {
+                effects.append(.log(LogEvent(
+                    AppsUsedSnapshotPayload(
+                        sessionID: finished.id,
+                        apps: finished.appsUsed,
+                        domains: finished.domainsVisited
+                    ),
+                    id: context.newID(),
+                    timestamp: now
+                )))
+            }
 
             var converted = request
             converted.kind = .full
@@ -204,8 +219,11 @@ enum FocusReducer {
                 break
 
             case .session(var session):
-                if let previous, previous.bundleID != app.bundleID, dwell >= config.appsUsedThreshold {
-                    session.noteUsage(of: previous, seconds: dwell)
+                if let previous, previous.bundleID != app.bundleID {
+                    let credited = min(dwell, now.timeIntervalSince(session.startedAt))
+                    if credited >= config.appsUsedThreshold {
+                        session.noteUsage(of: previous, seconds: credited)
+                    }
                 }
                 let decision = Allowlist.decide(app: app, session: session, baseline: state.settings.baseline)
                 if case .violation(let kind) = decision {
@@ -483,6 +501,22 @@ enum FocusReducer {
         ))]
     }
 
+    /// Credits time in the app you are in right now. Usage is otherwise only counted on
+    /// the way out of an app, so a session spent in a single app would record nothing.
+    private static func creditingCurrentApp(
+        _ session: Session,
+        state: AppState,
+        now: Date,
+        config: FocusGuardConfig
+    ) -> Session {
+        guard let app = state.frontmostApp, let since = state.frontmostSince else { return session }
+        let dwell = min(now.timeIntervalSince(since), now.timeIntervalSince(session.startedAt))
+        guard dwell >= config.appsUsedThreshold else { return session }
+        var session = session
+        session.noteUsage(of: app, seconds: dwell)
+        return session
+    }
+
     private static func endSession(
         _ session: Session,
         outcome: SessionOutcome,
@@ -492,7 +526,7 @@ enum FocusReducer {
         trigger: GateTrigger,
         answered: Bool? = nil
     ) -> [Effect] {
-        var session = session
+        var session = creditingCurrentApp(session, state: state, now: endedAt, config: .current)
         session.endedAt = endedAt
         session.outcome = outcome
 

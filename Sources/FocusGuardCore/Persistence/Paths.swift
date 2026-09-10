@@ -9,6 +9,10 @@ struct FocusGuardPaths: Sendable {
     }
 
     init(fileManager: FileManager = .default) {
+        if let override = ProcessInfo.processInfo.environment["FOCUSGUARD_DATA_DIR"], !override.isEmpty {
+            self.root = URL(fileURLWithPath: override, isDirectory: true)
+            return
+        }
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
         self.root = base.appendingPathComponent("FocusGuard", isDirectory: true)

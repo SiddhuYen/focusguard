@@ -541,3 +541,91 @@ struct GateSuggestionTests {
         #expect(GateSuggestions.similarity("email the landlord", "write the lab report") < 0.2)
     }
 }
+
+@Suite("Reducer: regressions found by the self-check")
+struct ReducerRegressionTests {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let xcode = AppIdentity(bundleID: "com.apple.dt.Xcode", name: "Xcode")
+
+    private func context(_ offset: TimeInterval = 0) -> ReducerContext {
+        .fixed(now: start.addingTimeInterval(offset))
+    }
+
+    private func openSession() -> AppState {
+        var state = AppState()
+        state.frontmostApp = xcode
+        state.frontmostSince = start.loggable
+        let request = SessionRequest(kind: .open, goal: "quick fix", anchor: xcode, allowedBundleIDs: [], duration: nil)
+        return FocusReducer.reduce(state, .sessionStartRequested(request), context: context()).0
+    }
+
+    @Test("Answering the five minute panel late does not buy extra time")
+    func extensionIsTenMinutesTotal() {
+        let state = openSession()
+        // Panel answered a minute after it appeared.
+        let (extended, _) = FocusReducer.reduce(state, .openSessionExtended, context: context(6 * 60))
+        let session = extended.activeSession
+        #expect(session?.plannedEnd == start.addingTimeInterval(10 * 60))
+    }
+
+    @Test("A session spent entirely in one app still carries that app forward")
+    func creditsTheAppYouAreStillIn() {
+        let state = openSession()
+        // No app switch at all: usage used to be credited only on the way out.
+        let converted = SessionRequest(
+            kind: .full, goal: "quick fix", anchor: xcode, allowedBundleIDs: [xcode.bundleID], duration: 25 * 60
+        )
+        let (next, effects) = FocusReducer.reduce(state, .convertToFullRequested(converted), context: context(5 * 60))
+        #expect(next.activeSession?.kind == .full)
+
+        let snapshot = effects.compactMap { effect -> AppsUsedSnapshotPayload? in
+            guard case .log(let event) = effect else { return nil }
+            return event.decode(AppsUsedSnapshotPayload.self)
+        }.first
+        #expect(snapshot?.apps.first?.bundleID == xcode.bundleID)
+        #expect((snapshot?.apps.first?.seconds ?? 0) >= 5 * 60)
+    }
+
+    @Test("Ending a session credits the app you were in")
+    func creditsOnEnd() {
+        let state = openSession()
+        let (_, effects) = FocusReducer.reduce(state, .forceEnd(outcome: .finished), context: context(4 * 60))
+        let snapshot = effects.compactMap { effect -> AppsUsedSnapshotPayload? in
+            guard case .log(let event) = effect else { return nil }
+            return event.decode(AppsUsedSnapshotPayload.self)
+        }.first
+        #expect(snapshot?.apps.contains { $0.bundleID == xcode.bundleID } == true)
+    }
+}
+
+@Suite("Reducer: app usage accounting")
+struct AppUsageTests {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+    let xcode = AppIdentity(bundleID: "com.apple.dt.Xcode", name: "Xcode")
+    let slack = AppIdentity(bundleID: "com.tinyspeck.slackmacgap", name: "Slack")
+
+    private func context(_ offset: TimeInterval = 0) -> ReducerContext {
+        .fixed(now: start.addingTimeInterval(offset))
+    }
+
+    @Test("A session never inherits time spent before it started")
+    func usageIsClampedToTheSession() {
+        // You sat in Slack for an hour before the gate, then started a session.
+        var state = AppState()
+        state.frontmostApp = slack
+        state.frontmostSince = start.addingTimeInterval(-3600).loggable
+
+        let request = SessionRequest(
+            kind: .full, goal: "focus", anchor: xcode,
+            allowedBundleIDs: [xcode.bundleID, slack.bundleID], duration: 25 * 60
+        )
+        let (started, _) = FocusReducer.reduce(state, .sessionStartRequested(request), context: context())
+        #expect(started.frontmostSince == start.loggable, "the dwell clock restarts with the session")
+
+        // Five minutes in, you switch away from Slack.
+        let (switched, _) = FocusReducer.reduce(started, .appActivated(xcode), context: context(5 * 60))
+        let usage = switched.activeSession?.appsUsed.first
+        #expect(usage?.bundleID == slack.bundleID)
+        #expect(usage?.seconds == TimeInterval(300), "five minutes, not the hour before the session")
+    }
+}

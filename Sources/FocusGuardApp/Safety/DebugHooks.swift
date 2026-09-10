@@ -12,6 +12,14 @@ import Foundation
 enum DebugHooks {
     static func runIfRequested() {
         #if DEBUG
+        if ProcessInfo.processInfo.environment["FOCUSGUARD_SELFCHECK"] == "1" {
+            // Let the app finish launching, then drive it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                MainActor.assumeIsolated { SelfCheck.run() }
+            }
+            return
+        }
+
         if let seconds = value(for: "FOCUSGUARD_SIMULATE_HANG") {
             NSLog("FocusGuard: simulating a \(seconds)s main-thread hang")
             Thread.sleep(forTimeInterval: seconds)

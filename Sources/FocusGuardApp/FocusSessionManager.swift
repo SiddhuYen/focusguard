@@ -45,6 +45,13 @@ final class FocusSessionManager: ObservableObject {
 
     private var tickTimer: Timer?
     private var displayTimer: Timer?
+    /// Swapped for a controllable clock by the debug self-check.
+    var reducerContext: ReducerContext = .live
+    /// Debug self-check hook: sees every effect the reducer produced.
+    var effectObserver: ((Effect) -> Void)?
+    /// Debug self-check: skip effects that would disturb the machine (hiding apps,
+    /// stealing focus, sleeping).
+    var suppressDisruptiveEffects = false
     private var isSyncingSettings = false
     private var hasStarted = false
     private var isTerminating = false
@@ -91,6 +98,9 @@ final class FocusSessionManager: ObservableObject {
         configureMonitors()
     }
 
+    /// Test seam: drive the state machine directly from the debug self-check.
+    func send(_ event: AppEvent) { dispatch(event) }
+
     /// Called once, from applicationWillFinishLaunching. Kept out of `init` so that
     /// nothing an effect touches can re-enter the singleton while it is being created.
     func start() {
@@ -115,7 +125,7 @@ final class FocusSessionManager: ObservableObject {
         startTickTimer()
         startDisplayTimer()
         observeSystemEvents()
-        SystemControl.syncLoginItem(enabled: true)
+        if !suppressDisruptiveEffects { SystemControl.syncLoginItem(enabled: true) }
     }
 
     // MARK: - Wiring
@@ -188,11 +198,14 @@ final class FocusSessionManager: ObservableObject {
     // MARK: - The event loop
 
     private func dispatch(_ event: AppEvent) {
-        let (next, effects) = FocusReducer.reduce(state, event)
+        let (next, effects) = FocusReducer.reduce(state, event, context: reducerContext)
         let wasEnded = state.activeSession?.id != next.activeSession?.id
         state = next
         syncSettingsDraft()
-        for effect in effects { perform(effect) }
+        for effect in effects {
+            effectObserver?(effect)
+            perform(effect)
+        }
         if wasEnded { reloadHistory() }
     }
 
@@ -253,11 +266,13 @@ final class FocusSessionManager: ObservableObject {
             interventionEngine.dismiss()
 
         case .activateApp(let bundleID):
+            guard !suppressDisruptiveEffects else { return }
             guard let app = appResolver.runningApplication(bundleID: bundleID) else { return }
             app.unhide()
             app.activate(options: [.activateAllWindows])
 
         case .hideApps(let allowed):
+            guard !suppressDisruptiveEffects else { return }
             hideApps(except: allowed)
 
         case .monitorURLs(let app):
@@ -270,6 +285,7 @@ final class FocusSessionManager: ObservableObject {
             urlMonitor.start(for: running)
 
         case .sleepMac:
+            guard !suppressDisruptiveEffects else { return }
             SystemControl.sleepNow()
         }
     }
@@ -469,7 +485,18 @@ final class FocusSessionManager: ObservableObject {
 
     func convertOpenSession(duration: TimeInterval) {
         guard let session = state.activeSession else { return }
-        var allowed = session.appsUsed
+        // Include the app currently in front: the reducer credits it on the way out, but
+        // the allowlist is built here, before that happens.
+        var appsUsed = session.appsUsed
+        if let current = state.frontmostApp, let since = state.frontmostSince {
+            let now = reducerContext.now()
+            let dwell = min(now.timeIntervalSince(since), now.timeIntervalSince(session.startedAt))
+            if dwell >= FocusGuardConfig.current.appsUsedThreshold,
+               !appsUsed.contains(where: { $0.bundleID == current.bundleID }) {
+                appsUsed.append(AppUsage(bundleID: current.bundleID, name: current.name, seconds: dwell))
+            }
+        }
+        var allowed = appsUsed
             .filter { $0.seconds >= FocusGuardConfig.current.appsUsedThreshold }
             .sorted { $0.seconds > $1.seconds }
             .map(\.bundleID)
@@ -478,7 +505,7 @@ final class FocusSessionManager: ObservableObject {
         dispatch(.convertToFullRequested(SessionRequest(
             kind: .full,
             goal: session.goal,
-            anchor: session.appsUsed.max(by: { $0.seconds < $1.seconds })
+            anchor: appsUsed.max(by: { $0.seconds < $1.seconds })
                 .map { AppIdentity(bundleID: $0.bundleID, name: $0.name) } ?? anchorApp(),
             allowedBundleIDs: allowed,
             allowedSites: session.domainsVisited.map { SiteRule.domain($0) },
