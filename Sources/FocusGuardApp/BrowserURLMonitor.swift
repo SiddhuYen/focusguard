@@ -1,5 +1,6 @@
 // BrowserURLMonitor.swift
-// Monitors the active tab URL for supported browsers and reports changes.
+// Polls the active tab URL of the frontmost browser and reports what it sees, plus what
+// it could not see: fail-closed enforcement depends on knowing the difference (3.5).
 
 import AppKit
 import Foundation
@@ -13,31 +14,35 @@ final class BrowserURLMonitor {
     }
 
     var onURLChange: ((URLChange) -> Void)?
+    /// Reports consecutive failed reads for the current browser, starting at 1.
+    var onReadFailure: ((RunningApp, Int) -> Void)?
+    /// AppleScript refused (-1743 means Automation is not authorized).
+    var onAutomationError: ((Int, String) -> Void)?
+    var onAutomationSuccess: (() -> Void)?
 
     private var timer: Timer?
     private var currentApp: RunningApp?
     private var lastURLString: String?
-    private let pollInterval: TimeInterval = 0.8
+    private var consecutiveFailures = 0
+    fileprivate var lastScriptErrorCode: Int?
+    private let pollInterval = FocusGuardConfig.current.urlPollInterval
 
-    // Start monitoring URLs for a specific running browser app
     func start(for app: RunningApp) {
-        guard isSupportedBrowser(bundleID: app.bundleIdentifier) else {
+        guard KnownBrowser.isBrowser(bundleID: app.bundleIdentifier) else {
             stop()
             return
         }
+        if currentApp?.bundleIdentifier == app.bundleIdentifier, timer != nil { return }
+
         currentApp = app
         lastURLString = nil
+        consecutiveFailures = 0
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                await self?.poll()
-            }
+            Task { @MainActor in self?.poll() }
         }
-        // Fire immediately once
-        Task { @MainActor in
-            await poll()
-        }
+        poll()
     }
 
     func stop() {
@@ -45,32 +50,32 @@ final class BrowserURLMonitor {
         timer = nil
         currentApp = nil
         lastURLString = nil
+        consecutiveFailures = 0
     }
 
-    private func poll() async {
+    var isRunning: Bool { timer != nil }
+
+    private func poll() {
         guard let app = currentApp else { return }
-        guard let urlString = fetchURLString(for: app), !urlString.isEmpty else { return }
-        if urlString == lastURLString { return }
-        lastURLString = urlString
-        if let url = URL(string: urlString) {
-            onURLChange?(URLChange(app: app, url: url))
+        lastScriptErrorCode = nil
+
+        guard let urlString = fetchURLString(for: app), !urlString.isEmpty, let url = URL(string: urlString) else {
+            consecutiveFailures += 1
+            if let code = lastScriptErrorCode {
+                onAutomationError?(code, app.name)
+            }
+            onReadFailure?(app, consecutiveFailures)
+            return
         }
+
+        if consecutiveFailures > 0 { onAutomationSuccess?() }
+        consecutiveFailures = 0
+
+        guard urlString != lastURLString else { return }
+        lastURLString = urlString
+        onURLChange?(URLChange(app: app, url: url))
     }
 
-    private func isSupportedBrowser(bundleID: String) -> Bool {
-        switch bundleID {
-        case "com.apple.Safari",
-             "com.google.Chrome",
-             "com.microsoft.edgemac",
-             "com.brave.Browser",
-             "org.mozilla.firefox",
-             "org.mozilla.firefoxdeveloperedition",
-             "org.mozilla.nightly":
-            return true
-        default:
-            return false
-        }
-    }
 }
 
 // MARK: - URL fetchers per browser
@@ -92,8 +97,7 @@ private extension BrowserURLMonitor {
             if let u = firefoxURLViaWebArea(pid: app.processIdentifier) { return u }
             if let u = firefoxURLViaFocusedElement(pid: app.processIdentifier) { return u }
             if let u = firefoxURLViaAXAddressBar(pid: app.processIdentifier) { return u }
-            if let u = firefoxURLViaAppleScript() { return u }
-            return urlFromWindowTitle(pid: app.processIdentifier)
+            return nil
         default:
             return nil
         }
@@ -121,34 +125,6 @@ private extension BrowserURLMonitor {
         end tell
         """
         return runAppleScript(script)
-    }
-
-    // Some Firefox builds expose a minimal AppleScript window title; try getting URL via JavaScript bridge if available, else nil
-    func firefoxURLViaAppleScript() -> String? {
-        let script = """
-        tell application "Firefox"
-            if (count of windows) is 0 then return ""
-            try
-                tell application "System Events"
-                    tell process "Firefox"
-                        set winTitle to name of front window
-                    end tell
-                end tell
-                return winTitle
-            on error
-                return ""
-            end try
-        end tell
-        """
-        // This returns window title; parse URL from it if present
-        guard let title = runAppleScript(script), !title.isEmpty else { return nil }
-        if let url = extractURL(fromWindowTitle: title) { return url }
-        return nil
-    }
-
-    func urlFromWindowTitle(pid: pid_t) -> String? {
-        guard let title = accessibilityWindowTitle(pid: pid) else { return nil }
-        return extractURL(fromWindowTitle: title)
     }
 
     func firefoxURLViaAXAddressBar(pid: pid_t) -> String? {
@@ -247,33 +223,16 @@ private extension BrowserURLMonitor {
         return nil
     }
 
-    func extractURL(fromWindowTitle title: String) -> String? {
-        // Heuristic: find something that looks like a URL or domain within the title
-        // Common formats: "Some Page – YouTube" or "https://example.com/path – Firefox"
-        // Try to detect a full URL first
-        let patterns = [
-            #"https?://[^\s]+"#,
-            #"[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"#
-        ]
-        for pattern in patterns {
-            if let range = title.range(of: pattern, options: .regularExpression) {
-                let candidate = String(title[range])
-                if candidate.hasPrefix("http://") || candidate.hasPrefix("https://") {
-                    return candidate
-                } else {
-                    // Build a URL from domain only
-                    return "https://\(candidate)"
-                }
-            }
-        }
-        return nil
+    func recordScriptError(_ error: NSDictionary) {
+        lastScriptErrorCode = (error["NSAppleScriptErrorNumber"] as? Int) ?? 0
     }
 
     func runAppleScript(_ source: String) -> String? {
         guard let script = NSAppleScript(source: source) else { return nil }
         var errorDict: NSDictionary?
         let output = script.executeAndReturnError(&errorDict)
-        if errorDict != nil {
+        if let errorDict {
+            recordScriptError(errorDict)
             return nil
         }
         return output.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -338,7 +297,7 @@ private extension BrowserURLMonitor {
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
               focusedRef != nil else { return nil }
-        var element = focusedRef as! AXUIElement
+        let element = focusedRef as! AXUIElement
         // If the focused element itself is a text field, try its value first (address bar case)
         if let role = roleOf(element), role == (kAXTextFieldRole as String) {
             if let raw = stringAttribute(kAXValueAttribute as String, of: element), let url = normalizePotentialURL(raw) {
@@ -365,8 +324,9 @@ private extension BrowserURLMonitor {
         while let el = current, hops < maxHops {
             if roleOf(el) == role { return el }
             var parentRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(el, kAXParentAttribute as CFString, &parentRef) == .success, let parent = parentRef {
-                current = parent as! AXUIElement
+            if AXUIElementCopyAttributeValue(el, kAXParentAttribute as CFString, &parentRef) == .success,
+               let parent = parentRef, CFGetTypeID(parent) == AXUIElementGetTypeID() {
+                current = (parent as! AXUIElement)
             } else {
                 break
             }
@@ -391,20 +351,3 @@ private extension BrowserURLMonitor {
         return nil
     }
 }
-
-// MARK: - Accessibility helpers
-
-private extension BrowserURLMonitor {
-    func accessibilityWindowTitle(pid: pid_t) -> String? {
-        let appElement = AXUIElementCreateApplication(pid)
-        var focusedWindow: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow)
-        guard result == .success, let window = focusedWindow else { return nil }
-
-        var titleCF: CFTypeRef?
-        let titleResult = AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &titleCF)
-        guard titleResult == .success, let title = titleCF as? String else { return nil }
-        return title
-    }
-}
-

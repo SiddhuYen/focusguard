@@ -6,16 +6,34 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if !sessionManager.permissions.isHealthy {
+                Button {
+                    sessionManager.openPermissionSettings()
+                } label: {
+                    Label(sessionManager.permissions.summary, systemImage: "exclamationmark.octagon.fill")
+                }
+                Divider()
+            }
+
+            if sessionManager.isSafeMode {
+                Text("Safe mode: enforcement is off for this launch")
+                Divider()
+            }
+
             if let session = sessionManager.activeSession {
                 Text(sessionManager.menuBarTitle)
                 Text("Goal: \(session.goal)")
                 Text("Time: \(session.elapsed.formattedDuration)")
-                Text("Escapes: \(session.escapes.count)")
+                if let remaining = session.remaining() {
+                    Text("Remaining: \(max(0, remaining).formattedDuration)")
+                }
                 Text("Attempts: \(session.violations.count)")
-
+                if !session.additions.isEmpty {
+                    Text("Added this session: \(session.additions.count)")
+                }
                 Divider()
             } else {
-                Text("Focus App: Idle")
+                Text("Focus Guard: Idle")
                 Text("Current: \(sessionManager.currentAppName)")
                 Divider()
             }
@@ -37,14 +55,14 @@ struct MenuBarView: View {
             Button {
                 sessionManager.addCurrentAppToAllowed()
             } label: {
-                Label("Allow Current App", systemImage: "plus.app")
+                Label("Add Current App to Session…", systemImage: "plus.app")
             }
             .disabled(sessionManager.canStartFocus)
 
             Button {
                 sessionManager.stopFocus()
             } label: {
-                Label("Stop Focus", systemImage: "stop.circle")
+                Label("End Session", systemImage: "stop.circle")
             }
             .disabled(sessionManager.canStartFocus)
 

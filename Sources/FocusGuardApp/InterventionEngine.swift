@@ -7,35 +7,39 @@ final class InterventionEngine {
     private var delegate: InterventionWindowDelegate?
 
     func present(
-        session: FocusSession,
-        violation: FocusViolation,
-        settings: UserSettings,
+        session: Session,
+        violation: Violation,
+        settings: Settings,
+        permissions: PermissionHealth,
         onReturn: @escaping () -> Void,
         onEscape: @escaping (String?) -> Void,
         onEnd: @escaping () -> Void
     ) {
-        if window != nil {
-            dismiss()
-        }
+        if window != nil { dismiss() }
 
         let view = InterventionView(
             session: session,
             violation: violation,
             settings: settings,
+            permissions: permissions,
             onReturn: onReturn,
             onEscape: onEscape,
             onEnd: onEnd
         )
 
+        var height: CGFloat = 320
+        if settings.requireReasonToLeave { height += 80 }
+        if !permissions.isHealthy { height += 56 }
+
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: settings.requireReasonToLeave ? 390 : 310),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: height),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
 
         let delegate = InterventionWindowDelegate()
-        panel.title = "FocusGuard"
+        panel.title = "Focus Guard"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
@@ -55,7 +59,6 @@ final class InterventionEngine {
 
     func bringToFront() {
         guard let window else { return }
-
         window.level = .modalPanel
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
@@ -70,7 +73,5 @@ final class InterventionEngine {
 }
 
 private final class InterventionWindowDelegate: NSObject, NSWindowDelegate {
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        false
-    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { false }
 }

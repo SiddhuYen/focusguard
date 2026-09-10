@@ -89,7 +89,7 @@ struct MultiAppSelectorView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Multi‑App Focus")
                 .font(.title2.bold())
-            Text("Choose the apps you’ll allow during this focus session.")
+            Text("Choose the apps you’ll allow during this focus session. Browsers whose tabs Focus Guard can’t read can’t be added.")
                 .foregroundStyle(.secondary)
         }
     }

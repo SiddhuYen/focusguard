@@ -8,7 +8,6 @@ final class ActiveAppMonitor: NSObject {
 
     func start() {
         guard !isMonitoring else { return }
-
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(activeApplicationDidChange(_:)),
@@ -19,6 +18,7 @@ final class ActiveAppMonitor: NSObject {
     }
 
     func stop() {
+        guard isMonitoring else { return }
         NSWorkspace.shared.notificationCenter.removeObserver(
             self,
             name: NSWorkspace.didActivateApplicationNotification,
@@ -31,14 +31,10 @@ final class ActiveAppMonitor: NSObject {
         guard
             let runningApplication = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
             let app = RunningApp(runningApplication: runningApplication)
-        else {
-            return
-        }
+        else { return }
 
-        // Ignore this app becoming active
-        if runningApplication.bundleIdentifier == Bundle.main.bundleIdentifier {
-            return
-        }
+        // Focus Guard's own panels must never look like a violation.
+        if runningApplication.bundleIdentifier == BuildInfo.bundleID { return }
 
         onActiveAppChanged?(app)
     }
