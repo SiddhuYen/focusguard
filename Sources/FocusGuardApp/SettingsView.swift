@@ -55,6 +55,10 @@ struct SettingsView: View {
                     LabeledContent("Accessibility", value: sessionManager.permissions.accessibilityTrusted ? "Granted" : "Missing")
                     LabeledContent("Automation", value: sessionManager.permissions.automationAuthorized ? "Granted" : "Missing")
                     HStack {
+                        if !sessionManager.permissions.accessibilityTrusted {
+                            Button("Request Accessibility…") { PermissionMonitor.promptForAccessibility() }
+                                .buttonStyle(.borderedProminent)
+                        }
                         Button("Open Accessibility Settings") { PermissionMonitor.openAccessibilitySettings() }
                         Button("Open Automation Settings") { PermissionMonitor.openAutomationSettings() }
                     }

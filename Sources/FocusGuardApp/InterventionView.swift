@@ -121,7 +121,7 @@ struct PermissionBanner: View {
             Spacer()
             Button("Fix") {
                 if !permissions.accessibilityTrusted {
-                    PermissionMonitor.openAccessibilitySettings()
+                    PermissionMonitor.promptForAccessibility()
                 } else {
                     PermissionMonitor.openAutomationSettings()
                 }

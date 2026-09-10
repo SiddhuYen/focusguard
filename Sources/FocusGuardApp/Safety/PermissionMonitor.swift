@@ -61,6 +61,15 @@ final class PermissionMonitor {
         onChange?(updated)
     }
 
+    /// Asks macOS for the Accessibility grant. The system prompt adds the app to the
+    /// list directly, which is less fiddly than finding it in System Settings.
+    static func promptForAccessibility() {
+        // The literal, because the kAXTrustedCheckOptionPrompt global is a `var` and so
+        // is not usable from Swift 6 concurrency-checked code.
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+    }
+
     // MARK: - Opening the right System Settings panes
 
     static func openAccessibilitySettings() {
