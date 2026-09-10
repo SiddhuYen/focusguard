@@ -184,7 +184,110 @@ enum SelfCheck {
         check("history reads back from the log", manager.sessionHistory.count >= 4,
               "\(manager.sessionHistory.count) sessions")
 
+        runPhase2Checks(manager: manager, safari: safari)
         report()
+    }
+
+    // MARK: - Phase 2: sites, pins, fail-closed, settings delays
+
+    private static func runPhase2Checks(manager: FocusSessionManager, safari: AppIdentity) {
+        let firefox = AppIdentity(bundleID: KnownBrowser.firefox.rawValue, name: "Firefox")
+
+        // A full session with a named site list allows that site and nothing else.
+        manager.toggleAllowed(bundleID: safari.bundleID)
+        manager.addSessionSite("developer.apple.com", scope: .domain)
+        manager.addSessionSite("https://www.youtube.com/watch?v=lecture1&t=30", scope: .pinnedPage)
+        check("a site can be allowed by domain", manager.sessionSites.contains(SiteRule(scope: .domain, pattern: "developer.apple.com")))
+        check("a page on a blocked domain can be pinned",
+              manager.sessionSites.contains(SiteRule(scope: .pinnedPage, pattern: "https://youtube.com/watch?v=lecture1")))
+
+        manager.addSessionSite("youtube.com", scope: .domain)
+        check("a blocked domain cannot be allowlisted", manager.siteInputError?.contains("blocked") == true,
+              manager.siteInputError ?? "no error")
+        manager.clearSiteInputError()
+
+        manager.startFullSession(goal: "self check sites", duration: 25 * 60)
+        manager.send(.appActivated(safari))
+        check("session carries its site list", manager.activeSession?.allowedSites.count == 2)
+
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://developer.apple.com/documentation/swift")!))
+        check("an allowed domain passes", !isIntervening(manager))
+
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://news.ycombinator.com")!))
+        check("an unlisted site is a violation", isIntervening(manager))
+        check("an unlisted site can be added with a reason", currentViolation(manager)?.isAddable == true)
+        manager.send(.returnRequested)
+
+        // The pin: this exact video plays, the next one does not.
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://www.youtube.com/watch?v=lecture1&t=900")!))
+        check("the pinned video plays", !isIntervening(manager))
+
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://www.youtube.com/watch?v=autoplayed")!))
+        check("autoplay to the next video is a violation", isIntervening(manager))
+        check("the rest of a blocked domain still cannot be added", currentViolation(manager)?.isAddable == false)
+        manager.send(.returnRequested)
+
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://www.youtube.com/")!))
+        check("the blocked domain's homepage is still blocked", isIntervening(manager))
+        manager.send(.returnRequested)
+
+        // Fail-closed thresholds, by browser.
+        check("fail-closed is on by default", manager.settingsDraft.failClosedURLReading)
+        manager.send(.urlReadFailed(browser: safari, consecutiveFailures: 4))
+        check("four unreadable polls are tolerated", !isIntervening(manager))
+        manager.send(.urlReadFailed(browser: safari, consecutiveFailures: 5))
+        check("five unreadable polls is a can't-verify violation", isIntervening(manager))
+        check("can't-verify names the browser",
+              currentViolation(manager)?.kind == .unverifiableURL(browser: safari.bundleID))
+        manager.send(.returnRequested)
+
+        manager.send(.urlReadFailed(browser: firefox, consecutiveFailures: 5))
+        check("Firefox gets a longer grace", !isIntervening(manager))
+        manager.send(.urlReadFailed(browser: firefox, consecutiveFailures: 12))
+        check("Firefox does fail closed eventually", isIntervening(manager))
+        manager.send(.returnRequested)
+
+        manager.send(.forceEnd(outcome: .finished))
+
+        // A pin on a blocked domain must not survive into a recent or a preset.
+        let recentSites = manager.suggestions(for: "self check sites").first?.allowedSites ?? []
+        check("the pinned blocked page is not saved into recents",
+              !recentSites.contains { $0.pattern.contains("youtube") },
+              recentSites.map(\.pattern).joined(separator: ","))
+
+        // Settings: tightening now, loosening in 24 hours.
+        var edited = manager.settingsDraft
+        edited.blocklist.add("news.example.com")
+        edited.blocklist.remove("reddit.com")
+        manager.settingsDraft = edited
+
+        check("a new blocked domain applies immediately",
+              manager.settingsDraft.blocklist.blocks(host: "news.example.com") != nil)
+        check("unblocking waits", manager.settingsDraft.blocklist.blocks(host: "reddit.com") != nil)
+        check("the wait is visible as a pending change", manager.pendingChanges.count == 1)
+        check("scheduled change logged", loggedTypes().contains(.settingsChangeScheduled))
+        check("the countdown reads as a wait", manager.countdown(to: manager.pendingChanges[0].effectiveAt).hasPrefix("In "),
+              manager.countdown(to: manager.pendingChanges.first?.effectiveAt ?? Date()))
+
+        clock.advance(23 * 3600)
+        manager.send(.tick(idleSeconds: 0))
+        check("still pending after 23 hours", manager.pendingChanges.count == 1)
+
+        clock.advance(2 * 3600)
+        manager.send(.tick(idleSeconds: 0))
+        check("applied after 24 hours", manager.pendingChanges.isEmpty)
+        check("the domain is unblocked once the wait is over",
+              manager.settingsDraft.blocklist.blocks(host: "reddit.com") == nil)
+        check("applied change logged", loggedTypes().contains(.settingsChangeApplied))
+
+        // Cancelling a pending change is itself tightening, so it is instant.
+        var second = manager.settingsDraft
+        second.maxFullSessionLength = 4 * 3600
+        manager.settingsDraft = second
+        check("raising the session cap waits", manager.pendingChanges.count == 1)
+        manager.cancelPendingChange(manager.pendingChanges[0].id)
+        check("cancelling is instant", manager.pendingChanges.isEmpty)
+        check("cancellation logged", loggedTypes().contains(.settingsChangeCancelled))
     }
 
     // MARK: - Checking

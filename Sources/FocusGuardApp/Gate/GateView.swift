@@ -295,6 +295,42 @@ private struct GateOptions: View {
             }
 
             if sessionManager.selectionIncludesBrowser {
+                GateSiteList()
+            }
+        }
+    }
+}
+
+/// Per-session site allowlist (3.5). A domain allows the whole site; a pin allows one
+/// exact page and nothing else on that host.
+private struct GateSiteList: View {
+    @EnvironmentObject private var sessionManager: FocusSessionManager
+    @State private var entry = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Sites")
+                .font(.headline)
+                .foregroundStyle(.white.opacity(0.85))
+
+            HStack(spacing: 8) {
+                TextField("apple.com, or paste an exact page address", text: $entry)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { add(.domain) }
+                Button("Allow site") { add(.domain) }
+                    .disabled(entry.nilIfBlank == nil)
+                Button("Pin page") { add(.pinnedPage) }
+                    .disabled(entry.nilIfBlank == nil)
+            }
+
+            if let error = sessionManager.siteInputError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if sessionManager.sessionSites.isEmpty {
                 Toggle(
                     "Allow all non-blocked sites in this browser",
                     isOn: $sessionManager.allowAllNonBlockedSites
@@ -302,8 +338,41 @@ private struct GateOptions: View {
                 .toggleStyle(.checkbox)
                 .foregroundStyle(.white.opacity(0.75))
                 .font(.subheadline)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 6)], alignment: .leading, spacing: 6) {
+                    ForEach(sessionManager.sessionSites, id: \.self) { rule in
+                        HStack(spacing: 6) {
+                            Image(systemName: rule.scope == .pinnedPage ? "pin.fill" : "globe")
+                                .font(.caption2)
+                            Text(rule.displayName)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 0)
+                            Button {
+                                sessionManager.removeSessionSite(rule)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill").font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.07))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+                Text("Everything else in this browser counts as leaving the session.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.45))
             }
         }
+    }
+
+    private func add(_ scope: SiteRule.Scope) {
+        sessionManager.addSessionSite(entry, scope: scope)
+        if sessionManager.siteInputError == nil { entry = "" }
     }
 }
 

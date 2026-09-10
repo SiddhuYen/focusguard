@@ -20,6 +20,8 @@ final class FocusSessionManager: ObservableObject {
     @Published private(set) var pickerApps: [RunningApp] = []
     @Published private(set) var multiAppAllowedBundleIDs: [String] = []
     @Published var allowAllNonBlockedSites = false
+    @Published private(set) var sessionSites: [SiteRule] = []
+    @Published private(set) var siteInputError: String?
 
     /// The Settings window edits this copy; every edit is routed through the reducer so
     /// loosening changes can be delayed (3.8).
@@ -153,6 +155,18 @@ final class FocusSessionManager: ObservableObject {
 
         urlMonitor.onAutomationSuccess = { [weak self] in
             self?.permissionMonitor.noteAutomationSuccess()
+        }
+
+        urlMonitor.onHealthReport = { [weak self] health in
+            guard let self else { return }
+            let viaAX = KnownBrowser(bundleID: health.browser.bundleIdentifier)?.readsURLViaAccessibility ?? false
+            log.append(URLReadHealthPayload(
+                browser: health.browser.bundleIdentifier,
+                reads: health.reads,
+                failures: health.failures,
+                longestFailureRun: health.longestFailureRun,
+                viaAccessibility: viaAX
+            ))
         }
 
         permissionMonitor.onChange = { [weak self] health in
@@ -389,6 +403,40 @@ final class FocusSessionManager: ObservableObject {
         bundleID.split(separator: ".").last.map(String.init) ?? bundleID
     }
 
+    /// "in 23h 14m, at 4:05 PM" reads better than a bare timestamp when the whole point
+    /// is the wait.
+    func countdown(to date: Date) -> String {
+        let remaining = max(0, date.timeIntervalSince(reducerContext.now()))
+        let stamp = date.formatted(date: .omitted, time: .shortened)
+        return remaining == 0 ? "Applying now" : "In \(remaining.formattedDuration), at \(stamp)"
+    }
+
+    /// How reliably we have been able to read each browser lately, from the log.
+    var readHealthSummary: String? {
+        let reports = log.allEvents()
+            .compactMap { $0.decode(URLReadHealthPayload.self) }
+            .suffix(40)
+        guard !reports.isEmpty else { return nil }
+
+        var byBrowser: [String: (reads: Int, failures: Int)] = [:]
+        for report in reports {
+            var entry = byBrowser[report.browser] ?? (0, 0)
+            entry.reads += report.reads
+            entry.failures += report.failures
+            byBrowser[report.browser] = entry
+        }
+
+        return byBrowser
+            .sorted { $0.key < $1.key }
+            .map { browser, counts in
+                let total = counts.reads + counts.failures
+                let rate = total == 0 ? 1 : Double(counts.reads) / Double(total)
+                let name = displayName(for: browser)
+                return "\(name): \(Int(rate * 100))% of reads succeeded"
+            }
+            .joined(separator: " · ")
+    }
+
     func suggestions(for query: String) -> [Suggestion] {
         GateSuggestions.suggestions(query: query, presets: state.presets, recents: state.recentGoals)
     }
@@ -410,13 +458,18 @@ final class FocusSessionManager: ObservableObject {
         var allowed = multiAppAllowedBundleIDs
         if allowed.isEmpty { allowed = [anchor.bundleID] }
 
+        let allSites = sites.isEmpty ? sessionSites : sites
+        // A browser with no named sites is the case 3.5 asks about at setup: either you
+        // said yes to everything non-blocked, or there is no browser to police.
+        let allowAll = allSites.isEmpty && (allowAllNonBlockedSites || !selectionIncludesBrowser)
+
         dispatch(.sessionStartRequested(SessionRequest(
             kind: .full,
             goal: goal,
             anchor: anchor,
             allowedBundleIDs: allowed,
-            allowedSites: sites,
-            allowAllNonBlockedSites: allowAllNonBlockedSites || sites.isEmpty,
+            allowedSites: allSites,
+            allowAllNonBlockedSites: allowAll,
             duration: duration,
             presetID: presetID
         )))
@@ -437,6 +490,28 @@ final class FocusSessionManager: ObservableObject {
 
     func applySuggestion(_ suggestion: Suggestion) {
         multiAppAllowedBundleIDs = suggestion.allowedBundleIDs
+        sessionSites = suggestion.allowedSites
+    }
+
+    /// Adds a site to the session being set up. Says no out loud rather than silently
+    /// dropping what you typed (3.5).
+    func addSessionSite(_ raw: String, scope: SiteRule.Scope) {
+        switch SiteRuleInput.make(from: raw, scope: scope, blocklist: state.settings.blocklist) {
+        case .rule(let rule):
+            siteInputError = nil
+            if !sessionSites.contains(rule) { sessionSites.append(rule) }
+            if !sessionSites.isEmpty { allowAllNonBlockedSites = false }
+        case .rejected(let reason):
+            siteInputError = reason
+        }
+    }
+
+    func removeSessionSite(_ rule: SiteRule) {
+        sessionSites.removeAll { $0 == rule }
+    }
+
+    func clearSiteInputError() {
+        siteInputError = nil
     }
 
     /// Re-raise the shield, for the "go to the gate" button and the menu bar item.
@@ -633,6 +708,8 @@ final class FocusSessionManager: ObservableObject {
     private func resetSelection() {
         multiAppAllowedBundleIDs = []
         allowAllNonBlockedSites = false
+        sessionSites = []
+        siteInputError = nil
     }
 
     private func anchorApp() -> AppIdentity {

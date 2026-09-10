@@ -158,6 +158,7 @@ struct PersistenceTests {
             anchorBundleID: "com.apple.dt.Xcode",
             allowedBundleIDs: ["com.apple.dt.Xcode"],
             allowedSites: [],
+            allowAllNonBlockedSites: false,
             plannedEnd: nil,
             presetID: nil
         ))

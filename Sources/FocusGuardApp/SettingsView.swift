@@ -38,6 +38,21 @@ struct SettingsView: View {
                     LabeledContent("Launch at login", value: SystemControl.loginItemStatus)
                 }
 
+                Section("Browsers") {
+                    Toggle(
+                        "Treat unreadable pages as leaving the session",
+                        isOn: $sessionManager.settingsDraft.failClosedURLReading
+                    )
+                    Text("If Focus Guard can't read the address bar for several polls, it stops assuming the page is fine. Firefox gets a longer grace because its address is read from the accessibility tree.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let health = sessionManager.readHealthSummary {
+                        Text(health)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("Blocked Sites") {
                     Text("Blocked in every session, always. Adding one applies immediately; removing one takes 24 hours.")
                         .font(.footnote)
@@ -53,11 +68,14 @@ struct SettingsView: View {
 
                 if !sessionManager.pendingChanges.isEmpty {
                     Section("Pending Changes") {
+                        Text("Anything that loosens Focus Guard waits 24 hours. Tightening applies immediately.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         ForEach(sessionManager.pendingChanges) { pending in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(pending.change.summary)
-                                    Text("Takes effect \(pending.effectiveAt.formatted(date: .abbreviated, time: .shortened))")
+                                    Text(sessionManager.countdown(to: pending.effectiveAt))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

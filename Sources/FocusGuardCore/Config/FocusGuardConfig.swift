@@ -37,6 +37,10 @@ struct FocusGuardConfig: Codable, Equatable, Sendable {
     // Browser enforcement (3.5)
     var urlPollInterval: TimeInterval = 0.8
     var urlFailClosedPolls = 5
+    /// Firefox has no AppleScript URL support, so we read its accessibility tree, which is
+    /// best-effort. A higher bar keeps a flaky read from inventing violations. Revisit
+    /// once the urlReadHealth events say what the real success rate is.
+    var urlFailClosedPollsAccessibility = 12
 
     // Safety (3.9)
     var watchdogPingInterval: TimeInterval = 2

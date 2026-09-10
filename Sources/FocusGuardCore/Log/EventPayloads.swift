@@ -64,6 +64,7 @@ struct SessionStartedPayload: EventPayload {
     var anchorBundleID: String
     var allowedBundleIDs: [String]
     var allowedSites: [SiteRule]
+    var allowAllNonBlockedSites: Bool
     var plannedEnd: Date?
     var presetID: UUID?
 }
@@ -165,6 +166,22 @@ struct PermissionPayload: EventPayload {
 struct PermissionRestoredPayload: EventPayload {
     static let eventType = EventType.permissionRestored
     var permission: String
+}
+
+/// How often we could actually read a browser's address bar. Fail-closed enforcement is
+/// only as fair as this number, and for Firefox it is measured rather than assumed (3.5).
+struct URLReadHealthPayload: EventPayload {
+    static let eventType = EventType.urlReadHealth
+    var browser: String
+    var reads: Int
+    var failures: Int
+    var longestFailureRun: Int
+    var viaAccessibility: Bool
+
+    var successRate: Double {
+        let total = reads + failures
+        return total == 0 ? 1 : Double(reads) / Double(total)
+    }
 }
 
 struct SettingsChangeScheduledPayload: EventPayload {

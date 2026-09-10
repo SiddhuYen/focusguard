@@ -94,7 +94,9 @@ enum FocusReducer {
                 startedPayload(for: session), id: context.newID(), timestamp: now
             )))
             effects.append(.persistSession(session))
-            state.recentGoals = updatedRecents(state.recentGoals, with: session, now: now, context: context)
+            state.recentGoals = updatedRecents(
+                state.recentGoals, with: session, now: now, context: context, blocklist: state.settings.blocklist
+            )
             effects.append(.persistRecentGoals(state.recentGoals))
             if session.kind == .full {
                 effects.append(.hideApps(allowed: session.allowedBundleIDs))
@@ -163,7 +165,9 @@ enum FocusReducer {
             )))
             effects.append(.log(LogEvent(startedPayload(for: session), id: context.newID(), timestamp: now)))
             effects.append(.persistSession(session))
-            state.recentGoals = updatedRecents(state.recentGoals, with: session, now: now, context: context)
+            state.recentGoals = updatedRecents(
+                state.recentGoals, with: session, now: now, context: context, blocklist: state.settings.blocklist
+            )
             effects.append(.persistRecentGoals(state.recentGoals))
             effects.append(.hideApps(allowed: session.allowedBundleIDs))
 
@@ -255,7 +259,7 @@ enum FocusReducer {
 
         case .urlReadFailed(let browser, let failures):
             guard state.settings.failClosedURLReading,
-                  failures >= config.urlFailClosedPolls,
+                  failures >= failClosedThreshold(for: browser, config: config),
                   state.phase.isEnforcing,
                   let session = state.phase.session,
                   !isIntervention(state.phase) else { break }
@@ -375,6 +379,8 @@ enum FocusReducer {
             state.presets = presets
 
         case .presetCreated(let preset, let source):
+            var preset = preset
+            preset.allowedSites = portableSites(preset.allowedSites, blocklist: state.settings.blocklist)
             state.presets.removeAll { $0.id == preset.id }
             state.presets.append(preset)
             effects.append(.log(LogEvent(
@@ -631,11 +637,22 @@ enum FocusReducer {
         return session
     }
 
+    /// Strips pinned pages that only worked because they were pinned inside one full
+    /// session on a blocked domain (3.5, the rule proposed in the Phase 0 audit).
+    static func portableSites(_ sites: [SiteRule], blocklist: Blocklist) -> [SiteRule] {
+        sites.filter { rule in
+            guard rule.scope == .pinnedPage else { return true }
+            guard let host = URL(string: rule.pattern).flatMap(URLNormalizer.host(of:)) else { return true }
+            return blocklist.blocks(host: host) == nil
+        }
+    }
+
     private static func updatedRecents(
         _ recents: [RecentGoal],
         with session: Session,
         now: Date,
-        context: ReducerContext
+        context: ReducerContext,
+        blocklist: Blocklist
     ) -> [RecentGoal] {
         var recents = recents.filter { $0.goal.caseInsensitiveCompare(session.goal) != .orderedSame }
         recents.insert(
@@ -643,7 +660,7 @@ enum FocusReducer {
                 id: context.newID(),
                 goal: session.goal,
                 allowedBundleIDs: session.allowedBundleIDs,
-                allowedSites: session.allowedSites,
+                allowedSites: portableSites(session.allowedSites, blocklist: blocklist),
                 duration: session.plannedEnd.map { $0.timeIntervalSince(session.startedAt) },
                 lastUsed: now
             ),
@@ -715,6 +732,7 @@ enum FocusReducer {
             anchorBundleID: session.anchor.bundleID,
             allowedBundleIDs: session.allowedBundleIDs,
             allowedSites: session.allowedSites,
+            allowAllNonBlockedSites: session.allowAllNonBlockedSites,
             plannedEnd: session.plannedEnd,
             presetID: session.presetID
         )
@@ -745,6 +763,13 @@ enum FocusReducer {
         case .review(_, let reason): return .review(session, reason)
         case .gate, .overridden, .safeMode: return phase
         }
+    }
+
+    static func failClosedThreshold(for browser: AppIdentity, config: FocusGuardConfig) -> Int {
+        let known = KnownBrowser(bundleID: browser.bundleID)
+        return known?.readsURLViaAccessibility == true
+            ? config.urlFailClosedPollsAccessibility
+            : config.urlFailClosedPolls
     }
 
     private static func isIntervention(_ phase: AppPhase) -> Bool {

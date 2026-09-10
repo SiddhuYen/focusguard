@@ -128,7 +128,7 @@ struct HistoryProjectionTests {
         let events: [LogEvent] = [
             LogEvent(SessionStartedPayload(
                 sessionID: id, kind: .full, goal: "ship the gate", anchorBundleID: "com.apple.dt.Xcode",
-                allowedBundleIDs: ["com.apple.dt.Xcode"], allowedSites: [], plannedEnd: start.addingTimeInterval(1500), presetID: nil
+                allowedBundleIDs: ["com.apple.dt.Xcode"], allowedSites: [], allowAllNonBlockedSites: false, plannedEnd: start.addingTimeInterval(1500), presetID: nil
             ), timestamp: start),
             LogEvent(ViolationPayload(
                 sessionID: id, kind: .app(AppIdentity(bundleID: "com.tinyspeck.slackmacgap", name: "Slack")),
@@ -179,7 +179,7 @@ struct HistoryProjectionTests {
         let id = UUID()
         let events = [LogEvent(SessionStartedPayload(
             sessionID: id, kind: .open, goal: "quick fix", anchorBundleID: "com.apple.Terminal",
-            allowedBundleIDs: [], allowedSites: [], plannedEnd: nil, presetID: nil
+            allowedBundleIDs: [], allowedSites: [], allowAllNonBlockedSites: false, plannedEnd: nil, presetID: nil
         ), timestamp: start)]
 
         let sessions = SessionHistoryProjection.sessions(from: events)

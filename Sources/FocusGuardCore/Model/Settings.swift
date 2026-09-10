@@ -15,9 +15,9 @@ struct Settings: Codable, Equatable, Sendable {
     // Session limits
     var maxFullSessionLength: TimeInterval = FocusGuardConfig.current.fullSessionMaxLength
     var openSessionCountdownEnabled = FocusGuardConfig.current.openSessionCountdownEnabled
-    /// Turned on in Phase 2. When set, a browser whose URL cannot be read for
-    /// `urlFailClosedPolls` polls counts as a violation instead of being ignored (3.5).
-    var failClosedURLReading = false
+    /// A browser whose address cannot be read for several polls counts as a violation
+    /// rather than being waved through (3.5). Thresholds differ per browser.
+    var failClosedURLReading = true
 
     // Override (3.7)
     var overrideCountdown: TimeInterval = FocusGuardConfig.current.overrideCountdown

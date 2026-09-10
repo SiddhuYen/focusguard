@@ -20,10 +20,22 @@ final class BrowserURLMonitor {
     var onAutomationError: ((Int, String) -> Void)?
     var onAutomationSuccess: (() -> Void)?
 
+    /// Read reliability for the browser we just stopped watching, so fail-closed
+    /// thresholds can be judged against real numbers instead of assumptions (3.5).
+    struct ReadHealth {
+        let browser: RunningApp
+        var reads = 0
+        var failures = 0
+        var longestFailureRun = 0
+    }
+
+    var onHealthReport: ((ReadHealth) -> Void)?
+
     private var timer: Timer?
     private var currentApp: RunningApp?
     private var lastURLString: String?
     private var consecutiveFailures = 0
+    private var health: ReadHealth?
     fileprivate var lastScriptErrorCode: Int?
     private let pollInterval = FocusGuardConfig.current.urlPollInterval
 
@@ -34,9 +46,11 @@ final class BrowserURLMonitor {
         }
         if currentApp?.bundleIdentifier == app.bundleIdentifier, timer != nil { return }
 
+        reportHealth()
         currentApp = app
         lastURLString = nil
         consecutiveFailures = 0
+        health = ReadHealth(browser: app)
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
@@ -46,11 +60,21 @@ final class BrowserURLMonitor {
     }
 
     func stop() {
+        reportHealth()
         timer?.invalidate()
         timer = nil
         currentApp = nil
         lastURLString = nil
         consecutiveFailures = 0
+    }
+
+    private func reportHealth() {
+        guard let health, health.reads + health.failures > 0 else {
+            self.health = nil
+            return
+        }
+        onHealthReport?(health)
+        self.health = nil
     }
 
     var isRunning: Bool { timer != nil }
@@ -61,6 +85,11 @@ final class BrowserURLMonitor {
 
         guard let urlString = fetchURLString(for: app), !urlString.isEmpty, let url = URL(string: urlString) else {
             consecutiveFailures += 1
+            if var current = health {
+                current.failures += 1
+                current.longestFailureRun = max(current.longestFailureRun, consecutiveFailures)
+                health = current
+            }
             if let code = lastScriptErrorCode {
                 onAutomationError?(code, app.name)
             }
@@ -70,6 +99,7 @@ final class BrowserURLMonitor {
 
         if consecutiveFailures > 0 { onAutomationSuccess?() }
         consecutiveFailures = 0
+        health?.reads += 1
 
         guard urlString != lastURLString else { return }
         lastURLString = urlString

@@ -15,6 +15,69 @@ struct SiteRule: Codable, Equatable, Hashable, Sendable {
     static func domain(_ value: String) -> SiteRule {
         SiteRule(scope: .domain, pattern: Blocklist.normalize(value))
     }
+
+    var displayName: String {
+        switch scope {
+        case .domain: return pattern
+        case .pinnedPage: return pattern.replacingOccurrences(of: "https://", with: "")
+        }
+    }
+
+    var host: String? {
+        switch scope {
+        case .domain: return pattern
+        case .pinnedPage: return URL(string: pattern).flatMap(URLNormalizer.host(of:))
+        }
+    }
+}
+
+/// Turns what you typed at the gate into a site rule, and says no when it has to (3.5).
+enum SiteRuleInput {
+    enum Result: Equatable {
+        case rule(SiteRule)
+        case rejected(reason: String)
+    }
+
+    static func make(from raw: String, scope: SiteRule.Scope, blocklist: Blocklist) -> Result {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .rejected(reason: "Type a site or paste a page address.") }
+
+        switch scope {
+        case .domain:
+            let domain = Blocklist.normalize(trimmed)
+            guard !domain.isEmpty, domain.contains(".") else {
+                return .rejected(reason: "That doesn't look like a site.")
+            }
+            if let blocked = blocklist.blocks(host: domain) {
+                return .rejected(
+                    reason: "\(blocked) is blocked and can never be allowlisted. You can pin one exact page on it instead."
+                )
+            }
+            return .rule(SiteRule(scope: .domain, pattern: domain))
+
+        case .pinnedPage:
+            let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+            guard let url = URL(string: withScheme),
+                  let normalized = URLNormalizer.normalize(url),
+                  let host = URLNormalizer.host(of: url) else {
+                return .rejected(reason: "That isn't a page address.")
+            }
+
+            // A pin is a page, not a site. On a blocked domain that distinction is the
+            // whole safeguard, so a bare domain is refused rather than quietly widened.
+            let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let hasPage = !path.isEmpty || !(url.query ?? "").isEmpty
+            if !hasPage {
+                return .rejected(
+                    reason: blocklist.blocks(host: host) != nil
+                        ? "Pin the exact page you need. The rest of \(host) stays blocked."
+                        : "That is a whole site, not a page. Add it as a domain instead."
+                )
+            }
+
+            return .rule(SiteRule(scope: .pinnedPage, pattern: normalized))
+        }
+    }
 }
 
 /// Domains blocked in every session type, always. Never allowlistable (Section 2).
