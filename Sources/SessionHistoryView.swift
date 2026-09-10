@@ -26,6 +26,10 @@ struct SessionHistoryView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
+                        Text(session.goal)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+
                         HStack(spacing: 12) {
                             Label("\(session.violations.count)", systemImage: "exclamationmark.triangle")
                             Label("\(session.escapes.count)", systemImage: "timer")

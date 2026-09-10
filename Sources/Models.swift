@@ -26,23 +26,67 @@ struct FocusSession: Codable, Identifiable, Equatable {
     let allowedAppName: String
     let allowedBundleID: String
     let allowedProcessIdentifier: Int32
+    let allowedBundleIDsMulti: [String]?
+    let goal: String
     let startedAt: Date
     var endedAt: Date?
     var violations: [FocusViolation]
     var escapes: [FocusEscape]
 
-    init(app: RunningApp, startedAt: Date = Date()) {
+    init(app: RunningApp, goal: String, startedAt: Date = Date()) {
         self.id = UUID()
         self.allowedAppName = app.name
         self.allowedBundleID = app.bundleIdentifier
         self.allowedProcessIdentifier = app.processIdentifier
+        self.allowedBundleIDsMulti = nil
+        self.goal = goal
         self.startedAt = startedAt
         self.violations = []
         self.escapes = []
     }
 
+    init(anchorApp: RunningApp, allowedBundleIDsMulti: [String], goal: String, startedAt: Date = Date()) {
+        self.id = UUID()
+        self.allowedAppName = anchorApp.name
+        self.allowedBundleID = anchorApp.bundleIdentifier
+        self.allowedProcessIdentifier = anchorApp.processIdentifier
+        self.goal = goal
+        self.startedAt = startedAt
+        self.violations = []
+        self.escapes = []
+        self.allowedBundleIDsMulti = allowedBundleIDsMulti
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(UUID.self, forKey: .id)
+        allowedAppName = try container.decode(String.self, forKey: .allowedAppName)
+        allowedBundleID = try container.decode(String.self, forKey: .allowedBundleID)
+        allowedProcessIdentifier = try container.decode(Int32.self, forKey: .allowedProcessIdentifier)
+        allowedBundleIDsMulti = try container.decodeIfPresent([String].self, forKey: .allowedBundleIDsMulti)
+        goal = try container.decodeIfPresent(String.self, forKey: .goal) ?? "Stay focused on \(allowedAppName)"
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        endedAt = try container.decodeIfPresent(Date.self, forKey: .endedAt)
+        violations = try container.decode([FocusViolation].self, forKey: .violations)
+        escapes = try container.decode([FocusEscape].self, forKey: .escapes)
+    }
+
     var elapsed: TimeInterval {
         (endedAt ?? Date()).timeIntervalSince(startedAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case allowedAppName
+        case allowedBundleID
+        case allowedProcessIdentifier
+        case allowedBundleIDsMulti
+        case goal
+        case startedAt
+        case endedAt
+        case violations
+        case escapes
     }
 }
 

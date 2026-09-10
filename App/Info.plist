@@ -26,5 +26,7 @@
 	<string></string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>FocusGuard needs permission to read the active browser tab URL during focus sessions.</string>
 </dict>
 </plist>

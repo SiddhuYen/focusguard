@@ -35,6 +35,11 @@ final class ActiveAppMonitor: NSObject {
             return
         }
 
+        // Ignore this app becoming active
+        if runningApplication.bundleIdentifier == Bundle.main.bundleIdentifier {
+            return
+        }
+
         onActiveAppChanged?(app)
     }
 }

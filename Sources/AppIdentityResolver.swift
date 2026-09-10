@@ -7,6 +7,11 @@ struct AppIdentityResolver {
             return nil
         }
 
+        // Ignore FocusGuard itself
+        if runningApplication.bundleIdentifier == Bundle.main.bundleIdentifier {
+            return nil
+        }
+
         return RunningApp(runningApplication: runningApplication)
     }
 

@@ -25,6 +25,17 @@ struct InterventionView: View {
                 }
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Your goal")
+                    .font(.headline)
+                Text(session.goal)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .background(.quaternary.opacity(0.6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
             if settings.requireReasonToLeave {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Reason")
@@ -52,6 +63,13 @@ struct InterventionView: View {
                     .disabled(settings.requireReasonToLeave && reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
+                Button {
+                    onReturn()
+                } label: {
+                    Label("Cancel", systemImage: "xmark")
+                }
+                .buttonStyle(.bordered)
+
                 Button(role: .destructive) {
                     onEnd()
                 } label: {
@@ -63,3 +81,4 @@ struct InterventionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
+

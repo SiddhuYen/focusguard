@@ -8,6 +8,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let session = sessionManager.activeSession {
                 Text(sessionManager.menuBarTitle)
+                Text("Goal: \(session.goal)")
                 Text("Time: \(session.elapsed.formattedDuration)")
                 Text("Escapes: \(session.escapes.count)")
                 Text("Attempts: \(session.violations.count)")
@@ -25,6 +26,20 @@ struct MenuBarView: View {
                 Label("Focus on Current App", systemImage: "target")
             }
             .disabled(!sessionManager.canStartFocus)
+
+            Button {
+                sessionManager.presentMultiAppSelector()
+            } label: {
+                Label("Multi-App Focus", systemImage: "square.stack.3d.up.fill")
+            }
+            .disabled(!sessionManager.canStartFocus)
+
+            Button {
+                sessionManager.addCurrentAppToAllowed()
+            } label: {
+                Label("Allow Current App", systemImage: "plus.app")
+            }
+            .disabled(sessionManager.canStartFocus)
 
             Button {
                 sessionManager.stopFocus()
@@ -50,7 +65,7 @@ struct MenuBarView: View {
             Divider()
 
             Button {
-                NSApp.terminate(nil)
+                sessionManager.quit()
             } label: {
                 Label("Quit", systemImage: "power")
             }

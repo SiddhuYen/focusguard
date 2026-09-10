@@ -19,6 +19,10 @@
 		10000000000000000000010A /* Persistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000020A /* Persistence.swift */; };
 		10000000000000000000010B /* SessionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000020B /* SessionHistoryView.swift */; };
 		10000000000000000000010C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10000000000000000000020C /* SettingsView.swift */; };
+		C68620B22FBA48EE00D17B66 /* MultiAppSelectorEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68620B12FBA48EE00D17B66 /* MultiAppSelectorEngine.swift */; };
+		C68620B62FBC22B700D17B66 /* BrowserURLMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = C68620B52FBC22B700D17B66 /* BrowserURLMonitor.swift */; };
+		C6D66DBD2FBA475A00881F1A /* MultiAppSelectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D66DBC2FBA475A00881F1A /* MultiAppSelectorView.swift */; };
+		C6FED7A52FBA273400C7763C /* CommitmentPromptEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6FED7A42FBA272B00C7763C /* CommitmentPromptEngine.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +40,10 @@
 		10000000000000000000020C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		10000000000000000000020D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		10000000000000000000020E /* FocusGuard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FocusGuard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C68620B12FBA48EE00D17B66 /* MultiAppSelectorEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiAppSelectorEngine.swift; sourceTree = "<group>"; };
+		C68620B52FBC22B700D17B66 /* BrowserURLMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserURLMonitor.swift; sourceTree = "<group>"; };
+		C6D66DBC2FBA475A00881F1A /* MultiAppSelectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiAppSelectorView.swift; sourceTree = "<group>"; };
+		C6FED7A42FBA272B00C7763C /* CommitmentPromptEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitmentPromptEngine.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,8 +77,10 @@
 		100000000000000000000403 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				C6D66DBC2FBA475A00881F1A /* MultiAppSelectorView.swift */,
 				100000000000000000000201 /* ActiveAppMonitor.swift */,
 				100000000000000000000202 /* AppIdentityResolver.swift */,
+				C6FED7A42FBA272B00C7763C /* CommitmentPromptEngine.swift */,
 				100000000000000000000203 /* FocusGuardApp.swift */,
 				100000000000000000000204 /* FocusSessionManager.swift */,
 				100000000000000000000205 /* Formatters.swift */,
@@ -81,6 +91,8 @@
 				10000000000000000000020A /* Persistence.swift */,
 				10000000000000000000020B /* SessionHistoryView.swift */,
 				10000000000000000000020C /* SettingsView.swift */,
+				C68620B12FBA48EE00D17B66 /* MultiAppSelectorEngine.swift */,
+				C68620B52FBC22B700D17B66 /* BrowserURLMonitor.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -162,13 +174,17 @@
 			buildActionMask = 2147483647;
 			files = (
 				100000000000000000000101 /* ActiveAppMonitor.swift in Sources */,
+				C68620B62FBC22B700D17B66 /* BrowserURLMonitor.swift in Sources */,
 				100000000000000000000102 /* AppIdentityResolver.swift in Sources */,
 				100000000000000000000103 /* FocusGuardApp.swift in Sources */,
+				C6D66DBD2FBA475A00881F1A /* MultiAppSelectorView.swift in Sources */,
 				100000000000000000000104 /* FocusSessionManager.swift in Sources */,
 				100000000000000000000105 /* Formatters.swift in Sources */,
 				100000000000000000000106 /* InterventionEngine.swift in Sources */,
+				C6FED7A52FBA273400C7763C /* CommitmentPromptEngine.swift in Sources */,
 				100000000000000000000107 /* InterventionView.swift in Sources */,
 				100000000000000000000108 /* MenuBarView.swift in Sources */,
+				C68620B22FBA48EE00D17B66 /* MultiAppSelectorEngine.swift in Sources */,
 				100000000000000000000109 /* Models.swift in Sources */,
 				10000000000000000000010A /* Persistence.swift in Sources */,
 				10000000000000000000010B /* SessionHistoryView.swift in Sources */,
