@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Builds dist/FocusGuard.app.
+# Builds dist/FocusGuard.app, signed with the Apple Development identity configured in the
+# project (team 49JBT7CMG9). A stable signature is what lets macOS keep the Accessibility
+# and Automation grants across rebuilds: TCC keys them to the designated requirement, so
+# ad-hoc signing (a new hash every build) drops them every time.
 #
-# Signing: ad-hoc by default, which is why macOS drops the Accessibility and Automation
-# grants on every rebuild (TCC keys them to the code signature). Once you have an Apple
-# Development certificate, export your team ID and the grants start surviving rebuilds:
+#   ./scripts/build-xcode-app.sh                  # signed, hardened runtime
+#   FOCUSGUARD_TEAM_ID=OTHERTEAM ./scripts/...    # override the team
+#   FOCUSGUARD_ADHOC=1 ./scripts/...              # unsigned fallback, drops TCC grants
 #
-#   FOCUSGUARD_TEAM_ID=ABCDE12345 ./scripts/build-xcode-app.sh
-#
-# Find the team ID with: security find-identity -v -p codesigning
+# The first signed build asks for the login keychain password; choose "Always Allow".
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,34 +18,22 @@ APP_PATH="$DERIVED_DATA_DIR/Build/Products/$CONFIGURATION/FocusGuard.app"
 
 cd "$ROOT_DIR"
 
-if [ -n "${FOCUSGUARD_TEAM_ID:-}" ]; then
-  xcodebuild \
-    -project FocusGuard.xcodeproj \
-    -scheme FocusGuard \
-    -configuration "$CONFIGURATION" \
-    -derivedDataPath "$DERIVED_DATA_DIR" \
-    -destination 'platform=macOS' \
-    -allowProvisioningUpdates \
-    CODE_SIGNING_ALLOWED=YES \
-    CODE_SIGNING_REQUIRED=YES \
-    CODE_SIGN_STYLE=Automatic \
-    CODE_SIGN_IDENTITY="Apple Development" \
-    DEVELOPMENT_TEAM="$FOCUSGUARD_TEAM_ID" \
-    OTHER_CODE_SIGN_FLAGS="-o runtime" \
-    build
-else
-  echo "warning: no FOCUSGUARD_TEAM_ID set, falling back to ad-hoc signing." >&2
-  echo "         Accessibility and Automation grants will be dropped on every build." >&2
-  xcodebuild \
-    -project FocusGuard.xcodeproj \
-    -scheme FocusGuard \
-    -configuration "$CONFIGURATION" \
-    -derivedDataPath "$DERIVED_DATA_DIR" \
-    -destination 'platform=macOS' \
-    CODE_SIGNING_ALLOWED=NO \
-    CODE_SIGN_IDENTITY="" \
-    build
+args=(
+  -project FocusGuard.xcodeproj
+  -scheme FocusGuard
+  -configuration "$CONFIGURATION"
+  -derivedDataPath "$DERIVED_DATA_DIR"
+  -destination 'platform=macOS'
+)
+
+if [ "${FOCUSGUARD_ADHOC:-0}" = "1" ]; then
+  echo "warning: building ad-hoc. macOS will drop Accessibility and Automation grants." >&2
+  xcodebuild "${args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
   codesign --force --sign - "$APP_PATH"
+else
+  args+=(-allowProvisioningUpdates)
+  [ -n "${FOCUSGUARD_TEAM_ID:-}" ] && args+=(DEVELOPMENT_TEAM="$FOCUSGUARD_TEAM_ID")
+  xcodebuild "${args[@]}" build
 fi
 
 rm -rf "$ROOT_DIR/dist/FocusGuard.app"
@@ -52,4 +41,4 @@ mkdir -p "$ROOT_DIR/dist"
 cp -R "$APP_PATH" "$ROOT_DIR/dist/FocusGuard.app"
 
 echo "Built $ROOT_DIR/dist/FocusGuard.app"
-codesign -dv "$ROOT_DIR/dist/FocusGuard.app" 2>&1 | grep -E "Signature|TeamIdentifier|flags" || true
+codesign -dv "$ROOT_DIR/dist/FocusGuard.app" 2>&1 | grep -E "Identifier|TeamIdentifier|flags" || true
