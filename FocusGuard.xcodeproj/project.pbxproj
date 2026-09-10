@@ -14,6 +14,7 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FG00000000000000000201 /* Sources */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources; sourceTree = "<group>"; };
+		FG00000000000000000202 /* Resources */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Resources; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,6 +33,7 @@
 			children = (
 				FG00000000000000000402 /* App */,
 				FG00000000000000000201 /* Sources */,
+				FG00000000000000000202 /* Resources */,
 				FG00000000000000000403 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -70,6 +72,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				FG00000000000000000201 /* Sources */,
+				FG00000000000000000202 /* Resources */,
 			);
 			name = FocusGuard;
 			productName = FocusGuard;

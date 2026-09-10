@@ -15,6 +15,9 @@ final class FocusSessionManager: ObservableObject {
     @Published private(set) var state: AppState
     @Published private(set) var sessionHistory: [SessionSummary] = []
     @Published private(set) var currentAppName = "Unknown"
+    /// Ticks once a second while a session is running, so countdowns move.
+    @Published private(set) var now = Date()
+    @Published private(set) var pickerApps: [RunningApp] = []
 
     /// The Settings window edits this copy; every edit is routed through the reducer so
     /// loosening changes can be delayed (3.8).
@@ -54,6 +57,7 @@ final class FocusSessionManager: ObservableObject {
 
     private var escapeTimer: Timer?
     private var tickTimer: Timer?
+    private var displayTimer: Timer?
     private var isSyncingSettings = false
     private var lastKnownApp: RunningApp?
 
@@ -108,8 +112,10 @@ final class FocusSessionManager: ObservableObject {
         permissionMonitor.start()
         appMonitor.start()
         startTickTimer()
+        startDisplayTimer()
         observeSystemEvents()
         reloadHistory()
+        refreshPickerApps()
     }
 
     // MARK: - Wiring
@@ -120,6 +126,7 @@ final class FocusSessionManager: ObservableObject {
             currentAppName = app.name
             lastKnownApp = app
             dispatch(.appActivated(app.identity))
+            if state.canStartSession { refreshPickerApps() }
         }
 
         urlMonitor.onURLChange = { [weak self] change in
@@ -150,6 +157,16 @@ final class FocusSessionManager: ObservableObject {
         }
         center.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.launchGuard.noteSystemEvent("shutdown") }
+        }
+    }
+
+    private func startDisplayTimer() {
+        displayTimer?.invalidate()
+        displayTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.state.activeSession != nil { self.now = Date() }
+            }
         }
     }
 
@@ -265,6 +282,15 @@ final class FocusSessionManager: ObservableObject {
         }
     }
 
+    /// Short enough for the menu bar: time left, or elapsed when a session has no end.
+    var menuBarStatusText: String {
+        guard let session = state.activeSession else { return "" }
+        if let remaining = session.remaining() {
+            return max(0, remaining).formattedDuration
+        }
+        return session.elapsed.formattedDuration
+    }
+
     var menuBarSystemImage: String {
         if !state.permissions.isHealthy { return "exclamationmark.octagon.fill" }
         switch state.phase {
@@ -299,6 +325,58 @@ final class FocusSessionManager: ObservableObject {
             anchor: app.identity,
             allowedBundleIDs: [app.bundleIdentifier]
         ))
+    }
+
+    /// Starts a session from the window: the goal is typed there, so no modal prompt.
+    func startSession(goal: String, kind: SessionKind = .full, duration: TimeInterval? = nil) {
+        guard canStartFocus else { return }
+        let anchor = appResolver.frontmostApp() ?? lastKnownApp
+        var allowed = multiAppAllowedBundleIDs
+        if allowed.isEmpty, let anchor { allowed = [anchor.bundleIdentifier] }
+
+        let anchorIdentity = anchor?.identity
+            ?? allowed.first.map { AppIdentity(bundleID: $0, name: displayName(for: $0)) }
+            ?? AppIdentity(bundleID: BuildInfo.bundleID, name: "Focus Guard")
+
+        dispatch(.sessionStartRequested(SessionRequest(
+            kind: kind,
+            goal: goal,
+            anchor: anchorIdentity,
+            allowedBundleIDs: allowed,
+            duration: duration
+        )))
+        resetMultiAppSelection()
+
+        // Get out of the way and put you back in the app you are working in.
+        MainWindowController.shared.hide()
+        if let target = allowed.first ?? anchor?.bundleIdentifier {
+            perform(.activateApp(bundleID: target))
+        }
+    }
+
+    func toggleAllowed(bundleID: String) {
+        if multiAppAllowedBundleIDs.contains(bundleID) {
+            multiAppAllowedBundleIDs.removeAll { $0 == bundleID }
+        } else {
+            addAllowedBundleID(bundleID)
+        }
+    }
+
+    func displayName(for bundleID: String) -> String {
+        appResolver.displayName(for: bundleID) ?? bundleID
+    }
+
+    func refreshPickerApps() {
+        let current = appResolver.frontmostApp()
+        var apps = appResolver.runningApps().filter { $0.bundleIdentifier != BuildInfo.bundleID }
+        if let current, !apps.contains(where: { $0.bundleIdentifier == current.bundleIdentifier }) {
+            apps.insert(current, at: 0)
+        }
+        pickerApps = apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        // Preselect whatever you were just using.
+        if multiAppAllowedBundleIDs.isEmpty, let current {
+            addAllowedBundleID(current.bundleIdentifier)
+        }
     }
 
     func presentMultiAppSelector() {
@@ -376,16 +454,21 @@ final class FocusSessionManager: ObservableObject {
         reloadHistory()
     }
 
+    /// Called from applicationShouldTerminate: true means the quit may proceed.
+    func confirmQuit() -> Bool {
+        guard state.activeSession != nil else { return true }
+        guard confirmGoalIfNeeded(action: .quit) else { return false }
+        dispatch(.endRequested(outcome: .abandoned))
+        return true
+    }
+
     func quit() {
-        if state.activeSession != nil {
-            guard confirmGoalIfNeeded(action: .quit) else { return }
-            dispatch(.endRequested(outcome: .abandoned))
-        }
-        prepareForTermination(reason: "quit")
+        guard confirmQuit() else { return }
         NSApp.terminate(nil)
     }
 
     func prepareForTermination(reason: String) {
+        displayTimer?.invalidate()
         watchdog.stop()
         urlMonitor.stop()
         appMonitor.stop()

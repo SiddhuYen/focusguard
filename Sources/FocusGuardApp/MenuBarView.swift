@@ -1,7 +1,8 @@
 import SwiftUI
 
+/// Status readout. Anything you can *do* lives in the window; this exists so you can see
+/// where you stand without leaving the app you are working in.
 struct MenuBarView: View {
-    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var sessionManager: FocusSessionManager
 
     var body: some View {
@@ -21,71 +22,24 @@ struct MenuBarView: View {
             }
 
             if let session = sessionManager.activeSession {
-                Text(sessionManager.menuBarTitle)
-                Text("Goal: \(session.goal)")
-                Text("Time: \(session.elapsed.formattedDuration)")
+                Text(session.goal)
                 if let remaining = session.remaining() {
-                    Text("Remaining: \(max(0, remaining).formattedDuration)")
+                    Text("\(max(0, remaining).formattedDuration) left")
+                } else {
+                    Text("Running for \(session.elapsed.formattedDuration)")
                 }
                 Text("Attempts: \(session.violations.count)")
-                if !session.additions.isEmpty {
-                    Text("Added this session: \(session.additions.count)")
-                }
-                Divider()
             } else {
-                Text("Focus Guard: Idle")
-                Text("Current: \(sessionManager.currentAppName)")
-                Divider()
-            }
-
-            Button {
-                sessionManager.startFocusOnCurrentApp()
-            } label: {
-                Label("Focus on Current App", systemImage: "target")
-            }
-            .disabled(!sessionManager.canStartFocus)
-
-            Button {
-                sessionManager.presentMultiAppSelector()
-            } label: {
-                Label("Multi-App Focus", systemImage: "square.stack.3d.up.fill")
-            }
-            .disabled(!sessionManager.canStartFocus)
-
-            Button {
-                sessionManager.addCurrentAppToAllowed()
-            } label: {
-                Label("Add Current App to Session…", systemImage: "plus.app")
-            }
-            .disabled(sessionManager.canStartFocus)
-
-            Button {
-                sessionManager.stopFocus()
-            } label: {
-                Label("End Session", systemImage: "stop.circle")
-            }
-            .disabled(sessionManager.canStartFocus)
-
-            Divider()
-
-            Button {
-                openWindow(id: "settings")
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-            }
-
-            Button {
-                openWindow(id: "history")
-            } label: {
-                Label("Session History", systemImage: "clock.arrow.circlepath")
+                Text("No session. Every stretch starts with a goal.")
+                Text("Current app: \(sessionManager.currentAppName)")
             }
 
             Divider()
 
             Button {
-                sessionManager.quit()
+                MainWindowController.shared.show()
             } label: {
-                Label("Quit", systemImage: "power")
+                Label(sessionManager.activeSession == nil ? "Start a Session…" : "Open Focus Guard", systemImage: "target")
             }
         }
     }
