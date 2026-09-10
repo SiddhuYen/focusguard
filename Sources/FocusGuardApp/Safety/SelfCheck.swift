@@ -47,6 +47,21 @@ enum SelfCheck {
               "levels \(shieldLevels())")
         check("gateShown logged", loggedTypes().contains(.gateShown))
 
+        // 1b. The picker must offer apps you have not opened yet: at the gate you are
+        // naming what you are about to use.
+        manager.refreshPickerApps()
+        check("picker includes apps that are not running",
+              manager.pickerApps.contains { !$0.isRunning },
+              "\(manager.pickerApps.filter { !$0.isRunning }.count) not running of \(manager.pickerApps.count)")
+        check("Safari is offered whether or not it is open",
+              manager.pickerApps.contains { $0.bundleID == KnownBrowser.safari.rawValue })
+        manager.pickerSearch = "safa"
+        check("search tolerates the app you meant", manager.pickerApps.contains { $0.name.contains("Safari") } || manager.pickerApps.isEmpty,
+              "\(manager.pickerApps.count) results")
+        manager.pickerSearch = "safari"
+        check("search finds Safari", manager.pickerApps.contains { $0.bundleID == KnownBrowser.safari.rawValue })
+        manager.pickerSearch = ""
+
         // 2. Starting a full session drops the shield and hides other apps.
         effects = []
         manager.toggleAllowed(bundleID: xcode.bundleID)

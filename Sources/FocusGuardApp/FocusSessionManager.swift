@@ -17,7 +17,12 @@ final class FocusSessionManager: ObservableObject {
     @Published private(set) var currentAppName = "Unknown"
     /// Ticks once a second while a session is running, so countdowns move.
     @Published private(set) var now = Date()
-    @Published private(set) var pickerApps: [RunningApp] = []
+    @Published private(set) var pickerApps: [CatalogApp] = []
+    /// Filters the app picker at the gate; the list is long once it includes everything
+    /// installed, not just what happens to be running.
+    @Published var pickerSearch = "" {
+        didSet { applyPickerFilter() }
+    }
     @Published private(set) var multiAppAllowedBundleIDs: [String] = []
     @Published var allowAllNonBlockedSites = false
     @Published private(set) var sessionSites: [SiteRule] = []
@@ -40,6 +45,8 @@ final class FocusSessionManager: ObservableObject {
     private let permissionMonitor = PermissionMonitor()
     private let gateTriggers = GateTriggerMonitor()
     private let appResolver = AppIdentityResolver()
+    private let appCatalog = AppCatalog()
+    private var allPickerApps: [CatalogApp] = []
     private let appMonitor = ActiveAppMonitor()
     private let urlMonitor = BrowserURLMonitor()
     private let interventionEngine = InterventionEngine()
@@ -695,17 +702,56 @@ final class FocusSessionManager: ObservableObject {
 
     func refreshPickerApps() {
         let current = appResolver.frontmostApp()
-        var apps = appResolver.runningApps().filter { $0.bundleIdentifier != BuildInfo.bundleID }
-        if let current, !apps.contains(where: { $0.bundleIdentifier == current.bundleIdentifier }) {
-            apps.insert(current, at: 0)
+        var running = appResolver.runningApps()
+        if let current, !running.contains(where: { $0.bundleIdentifier == current.bundleIdentifier }) {
+            running.insert(current, at: 0)
         }
-        pickerApps = apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        appCatalog.refresh()
+        allPickerApps = appCatalog.merged(withRunning: running, excluding: [BuildInfo.bundleID])
+        applyPickerFilter()
+
         if multiAppAllowedBundleIDs.isEmpty, let current, Allowlist.canAllowlist(bundleID: current.bundleIdentifier) {
             multiAppAllowedBundleIDs = [current.bundleIdentifier]
         }
     }
 
+    /// Rescan for newly installed apps, off the critical path.
+    func rescanInstalledApps() {
+        appCatalog.refresh(force: true)
+        refreshPickerApps()
+    }
+
+    private func applyPickerFilter() {
+        let query = pickerSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            // Selected apps stay visible even when they are not running.
+            pickerApps = allPickerApps
+            return
+        }
+        pickerApps = allPickerApps.filter { app in
+            app.name.localizedCaseInsensitiveContains(query)
+                || app.bundleID.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    /// Chosen apps stay pinned above the list, so they do not vanish when you search.
+    var selectedApps: [CatalogApp] {
+        multiAppAllowedBundleIDs.map { bundleID in
+            allPickerApps.first { $0.bundleID == bundleID }
+                ?? CatalogApp(bundleID: bundleID, name: displayName(for: bundleID), isRunning: false, iconPath: nil)
+        }
+    }
+
+    var unselectedPickerApps: [CatalogApp] {
+        pickerApps.filter { !multiAppAllowedBundleIDs.contains($0.bundleID) }
+    }
+
+    func icon(for app: CatalogApp) -> NSImage? {
+        appCatalog.icon(for: app)
+    }
+
     private func resetSelection() {
+        pickerSearch = ""
         multiAppAllowedBundleIDs = []
         allowAllNonBlockedSites = false
         sessionSites = []

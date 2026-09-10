@@ -380,42 +380,84 @@ private struct GateAppPicker: View {
     @EnvironmentObject private var sessionManager: FocusSessionManager
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(sessionManager.pickerApps) { app in
-                    let selected = sessionManager.multiAppAllowedBundleIDs.contains(app.bundleIdentifier)
-                    let allowed = Allowlist.canAllowlist(bundleID: app.bundleIdentifier)
-                    Button {
-                        sessionManager.toggleAllowed(bundleID: app.bundleIdentifier)
-                    } label: {
-                        HStack(spacing: 7) {
-                            if let icon = app.icon {
-                                Image(nsImage: icon).resizable().frame(width: 16, height: 16)
-                            }
-                            Text(app.name)
-                                .lineLimit(1)
-                                .foregroundStyle(.white)
-                            Spacer(minLength: 0)
-                            if selected {
-                                Image(systemName: "checkmark")
-                                    .font(.caption2)
-                                    .foregroundStyle(.white)
-                            }
-                        }
-                        .font(.subheadline)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 6)
-                        .background(selected ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.07))
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
+                TextField("Search apps you'll need, running or not", text: $sessionManager.pickerSearch)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+
+            if !sessionManager.selectedApps.isEmpty {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 6)], alignment: .leading, spacing: 6) {
+                    ForEach(sessionManager.selectedApps) { app in
+                        AppRow(app: app, isSelected: true)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!allowed)
-                    .opacity(allowed ? 1 : 0.35)
-                    .help(allowed ? app.bundleIdentifier : "Focus Guard can't read this browser's tabs, so it can't police them.")
                 }
             }
+
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], alignment: .leading, spacing: 8) {
+                    ForEach(sessionManager.unselectedPickerApps) { app in
+                        AppRow(app: app, isSelected: false)
+                    }
+                }
+            }
+            .frame(maxHeight: 120)
         }
-        .frame(maxHeight: 132)
+    }
+}
+
+private struct AppRow: View {
+    @EnvironmentObject private var sessionManager: FocusSessionManager
+    let app: CatalogApp
+    let isSelected: Bool
+
+    var body: some View {
+        let allowed = Allowlist.canAllowlist(bundleID: app.bundleID)
+        Button {
+            sessionManager.toggleAllowed(bundleID: app.bundleID)
+        } label: {
+            HStack(spacing: 7) {
+                if let icon = sessionManager.icon(for: app) {
+                    Image(nsImage: icon).resizable().frame(width: 16, height: 16)
+                } else {
+                    Image(systemName: "app.dashed")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.4))
+                        .frame(width: 16, height: 16)
+                }
+                Text(app.name)
+                    .lineLimit(1)
+                    .foregroundStyle(.white)
+                if app.isRunning {
+                    Circle()
+                        .fill(.green.opacity(0.7))
+                        .frame(width: 5, height: 5)
+                }
+                Spacer(minLength: 0)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                }
+            }
+            .font(.subheadline)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .disabled(!allowed)
+        .opacity(allowed ? 1 : 0.35)
+        .help(allowed ? app.bundleID : "Focus Guard can't read this browser's tabs, so it can't police them.")
     }
 }
 
