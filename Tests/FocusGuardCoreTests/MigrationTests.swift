@@ -87,7 +87,6 @@ struct MigrationTests {
             blockedDomains: ["youtube.com", "www.youtube.com", "m.youtube.com", "reddit.com"]
         ))
         #expect(output.importedSettings)
-        #expect(output.settings.requireReasonToLeave)
         #expect(output.importedBlocklist)
         // The duplicate www/m variants collapse into one entry that still blocks all of them.
         #expect(output.settings.blocklist.domains == ["youtube.com", "m.youtube.com", "reddit.com"])

@@ -8,8 +8,8 @@ import Foundation
 /// decision about what is allowed lives here.
 @MainActor
 final class FocusSessionManager: ObservableObject {
-    /// The app delegate and the SwiftUI scene need the same instance, and it must exist
-    /// before any window does so the restart escape can be read at launch (3.9.3).
+    /// The app delegate, the shield and the SwiftUI scenes need the same instance, and it
+    /// must exist before any window does so the restart escape can be read at launch.
     static let shared = FocusSessionManager()
 
     @Published private(set) var state: AppState
@@ -18,6 +18,8 @@ final class FocusSessionManager: ObservableObject {
     /// Ticks once a second while a session is running, so countdowns move.
     @Published private(set) var now = Date()
     @Published private(set) var pickerApps: [RunningApp] = []
+    @Published private(set) var multiAppAllowedBundleIDs: [String] = []
+    @Published var allowAllNonBlockedSites = false
 
     /// The Settings window edits this copy; every edit is routed through the reducer so
     /// loosening changes can be delayed (3.8).
@@ -28,37 +30,24 @@ final class FocusSessionManager: ObservableObject {
         }
     }
 
-    // Multi-app picker state. This is UI selection only: it never reaches enforcement,
-    // which is what leaked allowlists between sessions in v1.
-    @Published var multiAppSearchText = "" {
-        didSet { updateMultiAppSearchResults() }
-    }
-    @Published private(set) var multiAppSearchResults: [AppDisplayItem] = []
-    @Published private(set) var multiAppAllowedBundleIDs: [String] = []
-
-    struct AppDisplayItem: Identifiable, Equatable {
-        var id: String { bundleIdentifier }
-        let bundleIdentifier: String
-        let displayName: String
-    }
-
     private let paths = FocusGuardPaths()
     private let log: EventLogStore
     private let store: StateStore
     private let launchGuard: LaunchGuard
     private let watchdog: MainThreadWatchdog
     private let permissionMonitor = PermissionMonitor()
+    private let gateTriggers = GateTriggerMonitor()
     private let appResolver = AppIdentityResolver()
     private let appMonitor = ActiveAppMonitor()
     private let urlMonitor = BrowserURLMonitor()
     private let interventionEngine = InterventionEngine()
-    private let selectorEngine = MultiAppSelectorEngine()
     private let commitmentPromptEngine = CommitmentPromptEngine()
 
-    private var escapeTimer: Timer?
     private var tickTimer: Timer?
     private var displayTimer: Timer?
     private var isSyncingSettings = false
+    private var hasStarted = false
+    private var isTerminating = false
     private var lastKnownApp: RunningApp?
 
     init() {
@@ -86,9 +75,8 @@ final class FocusSessionManager: ObservableObject {
         initial.settings = store.loadSettings() ?? Settings()
         initial.settings.baseline.selfBundleID = BuildInfo.bundleID
         initial.presets = store.loadPresets()
+        initial.recentGoals = store.loadRecentGoals()
         initial.pendingChanges = store.loadPendingChanges()
-        // Seed the observed permission state so a permission that was already missing at
-        // launch is recorded by appLaunched, not as a fresh "lost" event every time.
         initial.permissions.accessibilityTrusted = AXIsProcessTrusted()
         state = initial
         settingsDraft = initial.settings
@@ -101,21 +89,33 @@ final class FocusSessionManager: ObservableObject {
         }
 
         configureMonitors()
+    }
+
+    /// Called once, from applicationWillFinishLaunching. Kept out of `init` so that
+    /// nothing an effect touches can re-enter the singleton while it is being created.
+    func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
+
+        // The watchdog goes first: from here on a wedged main thread is recoverable.
+        watchdog.start()
+        launchGuard.startHeartbeat()
+
+        reloadHistory()
+        refreshPickerApps()
 
         dispatch(.launched(
             restoredSession: store.loadActiveSession(),
             safeMode: launchGuard.safeMode
         ))
 
-        watchdog.start()
-        launchGuard.startHeartbeat()
         permissionMonitor.start()
         appMonitor.start()
+        gateTriggers.start()
         startTickTimer()
         startDisplayTimer()
         observeSystemEvents()
-        reloadHistory()
-        refreshPickerApps()
+        SystemControl.syncLoginItem(enabled: true)
     }
 
     // MARK: - Wiring
@@ -148,6 +148,11 @@ final class FocusSessionManager: ObservableObject {
         permissionMonitor.onChange = { [weak self] health in
             self?.dispatch(.permissionsChanged(health))
         }
+
+        gateTriggers.settingsProvider = { [weak self] in self?.state.settings ?? Settings() }
+        gateTriggers.onTrigger = { [weak self] trigger in
+            self?.dispatch(.gateTriggered(trigger))
+        }
     }
 
     private func observeSystemEvents() {
@@ -157,6 +162,16 @@ final class FocusSessionManager: ObservableObject {
         }
         center.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.launchGuard.noteSystemEvent("shutdown") }
+        }
+    }
+
+    private func startTickTimer() {
+        tickTimer?.invalidate()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.dispatch(.tick(idleSeconds: GateTriggerMonitor.idleSeconds()))
+            }
         }
     }
 
@@ -170,20 +185,15 @@ final class FocusSessionManager: ObservableObject {
         }
     }
 
-    private func startTickTimer() {
-        tickTimer?.invalidate()
-        tickTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.dispatch(.tick) }
-        }
-    }
-
     // MARK: - The event loop
 
     private func dispatch(_ event: AppEvent) {
         let (next, effects) = FocusReducer.reduce(state, event)
+        let wasEnded = state.activeSession?.id != next.activeSession?.id
         state = next
         syncSettingsDraft()
         for effect in effects { perform(effect) }
+        if wasEnded { reloadHistory() }
     }
 
     private func perform(_ effect: Effect) {
@@ -200,15 +210,40 @@ final class FocusSessionManager: ObservableObject {
         case .persistPendingChanges(let changes):
             store.savePendingChanges(changes)
 
+        case .persistPresets(let presets):
+            store.savePresets(presets)
+
+        case .persistRecentGoals(let recents):
+            store.saveRecentGoals(recents)
+
+        case .showShield(let context):
+            guard !isTerminating else { return }
+            MainWindowController.shared.hide()
+            refreshPickerApps()
+            ShieldWindowController.shared.show(context: context)
+
+        case .hideShield:
+            ShieldWindowController.shared.hide()
+
+        case .setKiosk(let enabled):
+            ShieldWindowController.shared.setKiosk(enabled)
+
+        case .showReview(let session, let reason):
+            ReviewPanelController.shared.show(session: session, reason: reason)
+
+        case .dismissReview:
+            ReviewPanelController.shared.dismiss()
+
         case .showIntervention(let session, let violation):
             interventionEngine.present(
                 session: session,
                 violation: violation,
-                settings: state.settings,
                 permissions: state.permissions,
-                onReturn: { [weak self] in self?.returnToAllowedApp() },
-                onEscape: { [weak self] reason in self?.allowTemporaryEscape(reason: reason) },
-                onEnd: { [weak self] in self?.stopFocus() }
+                onReturn: { [weak self] in self?.dispatch(.returnRequested) },
+                onAdd: { [weak self] reason in self?.addViolationTargetToSession(reason: reason) },
+                onEnd: { [weak self] in self?.dispatch(.endRequested) },
+                onFixPermissions: { [weak self] in self?.openPermissionSettings() },
+                onOverride: { [weak self] in self?.presentOverrideFromIntervention() }
             )
 
         case .bringInterventionToFront:
@@ -218,12 +253,12 @@ final class FocusSessionManager: ObservableObject {
             interventionEngine.dismiss()
 
         case .activateApp(let bundleID):
-            guard let app = appResolver.runningApplication(bundleID: bundleID) else {
-                state.statusMessage = "\(bundleID) does not appear to be running."
-                return
-            }
+            guard let app = appResolver.runningApplication(bundleID: bundleID) else { return }
             app.unhide()
             app.activate(options: [.activateAllWindows])
+
+        case .hideApps(let allowed):
+            hideApps(except: allowed)
 
         case .monitorURLs(let app):
             guard let app,
@@ -234,16 +269,18 @@ final class FocusSessionManager: ObservableObject {
             }
             urlMonitor.start(for: running)
 
-        case .scheduleEscapeEnd(let date):
-            escapeTimer?.invalidate()
-            escapeTimer = Timer(fire: date, interval: 0, repeats: false) { [weak self] _ in
-                Task { @MainActor in self?.dispatch(.escapeExpired) }
-            }
-            RunLoop.main.add(escapeTimer!, forMode: .common)
+        case .sleepMac:
+            SystemControl.sleepNow()
+        }
+    }
 
-        case .cancelEscapeTimer:
-            escapeTimer?.invalidate()
-            escapeTimer = nil
+    /// Hides, never quits: your unsaved work is your business (Section 5).
+    private func hideApps(except allowed: [String]) {
+        let keep = Set(allowed).union(state.settings.baseline.all)
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular && !app.isHidden {
+            guard let bundleID = app.bundleIdentifier, !keep.contains(bundleID) else { continue }
+            app.hide()
         }
     }
 
@@ -269,21 +306,38 @@ final class FocusSessionManager: ObservableObject {
     var statusMessage: String? { state.statusMessage }
     var permissions: PermissionHealth { state.permissions }
     var pendingChanges: [PendingChange] { state.pendingChanges }
+    var presets: [Preset] { state.presets }
     var canStartFocus: Bool { state.canStartSession }
+    var isGated: Bool { state.isGated }
+    var overrideState: OverrideState? { state.overrideActive }
     var isSafeMode: Bool { if case .safeMode = state.phase { return true } else { return false } }
 
-    var menuBarTitle: String {
+    var gateContext: GateContext? {
+        if case .gate(let context) = state.phase { return context }
+        return nil
+    }
+
+    /// One line describing where the app is, for Settings and the menu.
+    var stateSummary: String {
+        if let override = state.overrideActive {
+            return "Override until \(override.until.formatted(date: .omitted, time: .shortened))"
+        }
         switch state.phase {
-        case .idle: return "Focus Guard: Idle"
-        case .session(let session): return title(prefix: "Focusing", session: session)
-        case .gracePeriod(let session, _): return title(prefix: "Escape", session: session)
-        case .intervention(let session, _): return title(prefix: "Left", session: session)
-        case .safeMode: return "Focus Guard: Safe mode"
+        case .gate: return "At the gate"
+        case .session(let session):
+            let kind = session.kind == .open ? "Open session" : "Session"
+            return "\(kind): \(session.goal)"
+        case .intervention: return "Intervention"
+        case .review: return "Review"
+        case .overridden: return "Override"
+        case .safeMode: return "Safe mode"
         }
     }
 
-    /// Short enough for the menu bar: time left, or elapsed when a session has no end.
     var menuBarStatusText: String {
+        if let override = state.overrideActive {
+            return "override \(max(0, override.until.timeIntervalSince(now)).formattedDuration)"
+        }
         guard let session = state.activeSession else { return "" }
         if let remaining = session.remaining() {
             return max(0, remaining).formattedDuration
@@ -292,173 +346,200 @@ final class FocusSessionManager: ObservableObject {
     }
 
     var menuBarSystemImage: String {
+        if state.overrideActive != nil { return "lock.open.trianglebadge.exclamationmark.fill" }
         if !state.permissions.isHealthy { return "exclamationmark.octagon.fill" }
         switch state.phase {
-        case .idle: return "circle"
-        case .session: return "target"
-        case .gracePeriod: return "timer"
+        case .gate: return "circle"
+        case .session(let session): return session.kind == .open ? "timer" : "target"
         case .intervention: return "exclamationmark.triangle"
+        case .review: return "questionmark.circle"
+        case .overridden: return "lock.open"
         case .safeMode: return "exclamationmark.shield.fill"
         }
     }
 
-    private func title(prefix: String, session: Session) -> String {
-        session.allowedBundleIDs.count > 1
-            ? "\(prefix): \(session.allowedBundleIDs.count) apps"
-            : "\(prefix): \(session.anchor.name)"
+    var selectionIncludesBrowser: Bool {
+        multiAppAllowedBundleIDs.contains { KnownBrowser.isBrowser(bundleID: $0) }
     }
 
-    // MARK: - Commands from the UI
-
-    func startFocusOnCurrentApp() {
-        guard let app = appResolver.frontmostApp() ?? lastKnownApp else {
-            state.statusMessage = "Could not read the current app."
-            return
-        }
-        guard let goal = commitmentPromptEngine.promptForGoal(appName: app.name) else {
-            state.statusMessage = "Focus start canceled."
-            return
-        }
-        start(request: SessionRequest(
-            kind: .full,
-            goal: goal,
-            anchor: app.identity,
-            allowedBundleIDs: [app.bundleIdentifier]
-        ))
-    }
-
-    /// Starts a session from the window: the goal is typed there, so no modal prompt.
-    func startSession(goal: String, kind: SessionKind = .full, duration: TimeInterval? = nil) {
-        guard canStartFocus else { return }
-        let anchor = appResolver.frontmostApp() ?? lastKnownApp
-        var allowed = multiAppAllowedBundleIDs
-        if allowed.isEmpty, let anchor { allowed = [anchor.bundleIdentifier] }
-
-        let anchorIdentity = anchor?.identity
-            ?? allowed.first.map { AppIdentity(bundleID: $0, name: displayName(for: $0)) }
-            ?? AppIdentity(bundleID: BuildInfo.bundleID, name: "Focus Guard")
-
-        dispatch(.sessionStartRequested(SessionRequest(
-            kind: kind,
-            goal: goal,
-            anchor: anchorIdentity,
-            allowedBundleIDs: allowed,
-            duration: duration
-        )))
-        resetMultiAppSelection()
-
-        // Get out of the way and put you back in the app you are working in.
-        MainWindowController.shared.hide()
-        if let target = allowed.first ?? anchor?.bundleIdentifier {
-            perform(.activateApp(bundleID: target))
+    /// The baseline, named where the app is running so it is readable in Settings.
+    var baselineDisplayNames: [(bundleID: String, name: String)] {
+        state.settings.baseline.all.sorted().map { bundleID in
+            (bundleID, appResolver.displayName(for: bundleID) ?? friendlyName(for: bundleID))
         }
     }
 
-    func toggleAllowed(bundleID: String) {
-        if multiAppAllowedBundleIDs.contains(bundleID) {
-            multiAppAllowedBundleIDs.removeAll { $0 == bundleID }
-        } else {
-            addAllowedBundleID(bundleID)
-        }
+    private func friendlyName(for bundleID: String) -> String {
+        bundleID.split(separator: ".").last.map(String.init) ?? bundleID
+    }
+
+    func suggestions(for query: String) -> [Suggestion] {
+        GateSuggestions.suggestions(query: query, presets: state.presets, recents: state.recentGoals)
     }
 
     func displayName(for bundleID: String) -> String {
         appResolver.displayName(for: bundleID) ?? bundleID
     }
 
-    func refreshPickerApps() {
-        let current = appResolver.frontmostApp()
-        var apps = appResolver.runningApps().filter { $0.bundleIdentifier != BuildInfo.bundleID }
-        if let current, !apps.contains(where: { $0.bundleIdentifier == current.bundleIdentifier }) {
-            apps.insert(current, at: 0)
-        }
-        pickerApps = apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        // Preselect whatever you were just using.
-        if multiAppAllowedBundleIDs.isEmpty, let current {
-            addAllowedBundleID(current.bundleIdentifier)
-        }
-    }
+    // MARK: - Gate commands
 
-    func presentMultiAppSelector() {
-        guard canStartFocus else { return }
-        selectorEngine.present(sessionManager: self)
-    }
+    func startFullSession(
+        goal: String,
+        duration: TimeInterval,
+        presetID: UUID? = nil,
+        sites: [SiteRule] = []
+    ) {
+        guard let goal = goal.nilIfBlank else { return }
+        let anchor = anchorApp()
+        var allowed = multiAppAllowedBundleIDs
+        if allowed.isEmpty { allowed = [anchor.bundleID] }
 
-    func startMultiAppFocusAndDismiss() {
-        startMultiAppFocus()
-        selectorEngine.dismiss()
-    }
-
-    func startMultiAppFocus() {
-        guard canStartFocus else { return }
-        if multiAppAllowedBundleIDs.isEmpty, let app = appResolver.frontmostApp() ?? lastKnownApp {
-            addAllowedBundleID(app.bundleIdentifier)
-        }
-        guard let anchor = appResolver.frontmostApp() ?? lastKnownApp else {
-            state.statusMessage = "Could not read the current app."
-            return
-        }
-        guard let goal = commitmentPromptEngine.promptForGoal(appName: anchor.name) else {
-            state.statusMessage = "Focus start canceled."
-            return
-        }
-        start(request: SessionRequest(
+        dispatch(.sessionStartRequested(SessionRequest(
             kind: .full,
             goal: goal,
-            anchor: anchor.identity,
-            allowedBundleIDs: multiAppAllowedBundleIDs
-        ))
-        resetMultiAppSelection()
+            anchor: anchor,
+            allowedBundleIDs: allowed,
+            allowedSites: sites,
+            allowAllNonBlockedSites: allowAllNonBlockedSites || sites.isEmpty,
+            duration: duration,
+            presetID: presetID
+        )))
+        resetSelection()
     }
 
-    private func start(request: SessionRequest) {
-        dispatch(.sessionStartRequested(request))
-        if let app = appResolver.frontmostApp() {
-            dispatch(.appActivated(app.identity))
+    func startOpenSession(goal: String) {
+        guard let goal = goal.nilIfBlank else { return }
+        dispatch(.sessionStartRequested(SessionRequest(
+            kind: .open,
+            goal: goal,
+            anchor: anchorApp(),
+            allowedBundleIDs: [],
+            duration: nil
+        )))
+        resetSelection()
+    }
+
+    func applySuggestion(_ suggestion: Suggestion) {
+        multiAppAllowedBundleIDs = suggestion.allowedBundleIDs
+    }
+
+    /// Re-raise the shield, for the "go to the gate" button and the menu bar item.
+    func showGate() {
+        guard let context = gateContext else { return }
+        ShieldWindowController.shared.show(context: context)
+    }
+
+    func answerGate(finished: Bool) {
+        dispatch(.gateAnswered(finished: finished))
+    }
+
+    func requestSleep() {
+        dispatch(.sleepRequested)
+    }
+
+    /// The override is reachable from the intervention panel as well as the gate (3.7).
+    func presentOverrideFromIntervention() {
+        OverridePanelController.shared.show { [weak self] reason in
+            self?.startOverride(reason: reason)
         }
     }
 
-    /// "Allow current app" during a session: a scoped addition with a reason, logged and
-    /// gone when the session ends.
+    func startOverride(reason: String) {
+        dispatch(.overrideStarted(reason: reason))
+    }
+
+    func endOverride() {
+        dispatch(.overrideEnded(early: true))
+    }
+
+    // MARK: - Session commands
+
+    func answerReview(finished: Bool) {
+        dispatch(.reviewAnswered(finished: finished))
+    }
+
+    func extendReview(by amount: TimeInterval) {
+        dispatch(.reviewExtended(by: amount))
+    }
+
+    func extendOpenSession() {
+        dispatch(.openSessionExtended)
+        ReviewPanelController.shared.dismiss()
+    }
+
+    func convertOpenSession(duration: TimeInterval) {
+        guard let session = state.activeSession else { return }
+        var allowed = session.appsUsed
+            .filter { $0.seconds >= FocusGuardConfig.current.appsUsedThreshold }
+            .sorted { $0.seconds > $1.seconds }
+            .map(\.bundleID)
+        if allowed.isEmpty { allowed = [anchorApp().bundleID] }
+
+        dispatch(.convertToFullRequested(SessionRequest(
+            kind: .full,
+            goal: session.goal,
+            anchor: session.appsUsed.max(by: { $0.seconds < $1.seconds })
+                .map { AppIdentity(bundleID: $0.bundleID, name: $0.name) } ?? anchorApp(),
+            allowedBundleIDs: allowed,
+            allowedSites: session.domainsVisited.map { SiteRule.domain($0) },
+            allowAllNonBlockedSites: session.domainsVisited.isEmpty,
+            duration: duration
+        )))
+    }
+
+    func stopFocus() {
+        dispatch(.endRequested)
+    }
+
+    func savePreset(named name: String, from session: Session) {
+        guard let name = name.nilIfBlank else { return }
+        let preset = Preset(
+            name: name,
+            keywords: Array(GateSuggestions.tokens(session.goal)),
+            allowedBundleIDs: session.allowedBundleIDs,
+            allowedSites: session.allowedSites,
+            defaultDuration: session.plannedEnd?.timeIntervalSince(session.startedAt)
+                ?? FocusGuardConfig.current.fullSessionQuickPicks[1]
+        )
+        dispatch(.presetCreated(preset, source: "review"))
+    }
+
+    /// "Add current app" from the menu, and the intervention panel's add button.
     func addCurrentAppToAllowed() {
         guard let app = appResolver.frontmostApp() ?? lastKnownApp else { return }
-
-        if state.canStartSession {
-            addAllowedBundleID(app.bundleIdentifier)
+        guard state.activeSession != nil else {
+            toggleAllowed(bundleID: app.bundleIdentifier)
             return
         }
-
         guard let reason = commitmentPromptEngine.promptForReason(
             title: "Add \(app.name) to this session?",
             message: "It stays allowed until this session ends, and the reason goes in your review."
         ) else { return }
-
         dispatch(.addToSessionRequested(target: .app(app.identity), reason: reason))
     }
 
-    func returnToAllowedApp() {
-        dispatch(.returnRequested)
-    }
-
-    func allowTemporaryEscape(reason: String? = nil) {
-        guard confirmGoalIfNeeded(action: .takeBreak) else {
-            interventionEngine.bringToFront()
+    private func addViolationTargetToSession(reason: String) {
+        guard case .intervention(_, let violation) = state.phase else { return }
+        let target: AdditionTarget
+        switch violation.kind {
+        case .app(let app):
+            target = .app(app)
+        case .unlistedSite(let host, _), .unpinnedPage(let host, _):
+            target = .site(.domain(host))
+        case .unverifiableURL:
+            target = .app(violation.app)
+        case .blockedSite:
             return
         }
-        dispatch(.escapeRequested(duration: state.settings.defaultEscapeDuration, reason: reason))
-    }
-
-    func stopFocus(reason: StopReason = .user) {
-        guard confirmGoalIfNeeded(action: reason == .quit ? .quit : .endFocus) else { return }
-        dispatch(.endRequested(outcome: .notFinished))
-        reloadHistory()
+        dispatch(.addToSessionRequested(target: target, reason: reason))
     }
 
     /// Called from applicationShouldTerminate: true means the quit may proceed.
     func confirmQuit() -> Bool {
-        guard state.activeSession != nil else { return true }
-        guard confirmGoalIfNeeded(action: .quit) else { return false }
-        dispatch(.endRequested(outcome: .abandoned))
+        guard let session = state.activeSession else { return true }
+        guard commitmentPromptEngine.confirm(action: .quit, goal: session.goal) else { return false }
+        isTerminating = true
+        dispatch(.forceEnd(outcome: .abandoned))
         return true
     }
 
@@ -468,13 +549,15 @@ final class FocusSessionManager: ObservableObject {
     }
 
     func prepareForTermination(reason: String) {
+        isTerminating = true
         displayTimer?.invalidate()
+        tickTimer?.invalidate()
         watchdog.stop()
         urlMonitor.stop()
         appMonitor.stop()
+        gateTriggers.stop()
         permissionMonitor.stop()
-        tickTimer?.invalidate()
-        escapeTimer?.invalidate()
+        ShieldWindowController.shared.setKiosk(false)
         launchGuard.markCleanExit(reason: reason)
     }
 
@@ -488,70 +571,51 @@ final class FocusSessionManager: ObservableObject {
 
     func openPermissionSettings() {
         if !state.permissions.accessibilityTrusted {
-            PermissionMonitor.openAccessibilitySettings()
+            PermissionMonitor.promptForAccessibility()
         } else {
             PermissionMonitor.openAutomationSettings()
         }
     }
 
-    private func confirmGoalIfNeeded(action: CommitmentAction) -> Bool {
-        guard let session = state.activeSession else { return true }
-        return commitmentPromptEngine.confirm(action: action, goal: session.goal)
-    }
+    // MARK: - App selection
 
-    // MARK: - Multi-app picker
-
-    var multiAppAllowedDisplayItems: [AppDisplayItem] {
-        multiAppAllowedBundleIDs
-            .map { AppDisplayItem(bundleIdentifier: $0, displayName: appResolver.displayName(for: $0) ?? $0) }
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-    }
-
-    func addAllowedApp(_ item: AppDisplayItem) {
-        addAllowedBundleID(item.bundleIdentifier)
-    }
-
-    func removeAllowedApp(_ item: AppDisplayItem) {
-        multiAppAllowedBundleIDs.removeAll { $0 == item.bundleIdentifier }
-    }
-
-    func resetMultiAppSelection() {
-        multiAppSearchText = ""
-        multiAppSearchResults = []
-        multiAppAllowedBundleIDs = []
-    }
-
-    private func addAllowedBundleID(_ bundleID: String) {
-        guard Allowlist.canAllowlist(bundleID: bundleID) else {
-            state.statusMessage = "Focus Guard can't read \(appResolver.displayName(for: bundleID) ?? bundleID)'s tabs, so it can't police them."
-            return
-        }
-        guard !multiAppAllowedBundleIDs.contains(bundleID) else { return }
-        multiAppAllowedBundleIDs.append(bundleID)
-    }
-
-    private func updateMultiAppSearchResults() {
-        let query = multiAppSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            multiAppSearchResults = []
-            return
-        }
-
-        let running = appResolver.runningApps().map {
-            AppDisplayItem(bundleIdentifier: $0.bundleIdentifier, displayName: $0.name)
-        }
-        let historical = sessionHistory.flatMap(\.allowedBundleIDs).map {
-            AppDisplayItem(bundleIdentifier: $0, displayName: appResolver.displayName(for: $0) ?? $0)
-        }
-
-        var seen = Set<String>()
-        multiAppSearchResults = (running + historical + multiAppAllowedDisplayItems)
-            .filter { seen.insert($0.bundleIdentifier).inserted }
-            .filter {
-                $0.displayName.localizedCaseInsensitiveContains(query)
-                    || $0.bundleIdentifier.localizedCaseInsensitiveContains(query)
+    func toggleAllowed(bundleID: String) {
+        if multiAppAllowedBundleIDs.contains(bundleID) {
+            multiAppAllowedBundleIDs.removeAll { $0 == bundleID }
+        } else {
+            guard Allowlist.canAllowlist(bundleID: bundleID) else {
+                state.statusMessage = "Focus Guard can't read \(displayName(for: bundleID))'s tabs, so it can't police them."
+                return
             }
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            multiAppAllowedBundleIDs.append(bundleID)
+        }
+    }
+
+    func refreshPickerApps() {
+        let current = appResolver.frontmostApp()
+        var apps = appResolver.runningApps().filter { $0.bundleIdentifier != BuildInfo.bundleID }
+        if let current, !apps.contains(where: { $0.bundleIdentifier == current.bundleIdentifier }) {
+            apps.insert(current, at: 0)
+        }
+        pickerApps = apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        if multiAppAllowedBundleIDs.isEmpty, let current, Allowlist.canAllowlist(bundleID: current.bundleIdentifier) {
+            multiAppAllowedBundleIDs = [current.bundleIdentifier]
+        }
+    }
+
+    private func resetSelection() {
+        multiAppAllowedBundleIDs = []
+        allowAllNonBlockedSites = false
+    }
+
+    private func anchorApp() -> AppIdentity {
+        if let first = multiAppAllowedBundleIDs.first {
+            return AppIdentity(bundleID: first, name: displayName(for: first))
+        }
+        if let app = appResolver.frontmostApp() ?? lastKnownApp {
+            return app.identity
+        }
+        return AppIdentity(bundleID: BuildInfo.bundleID, name: "Focus Guard")
     }
 
     // MARK: - Settings helpers

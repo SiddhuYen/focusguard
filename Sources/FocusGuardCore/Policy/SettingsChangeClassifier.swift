@@ -55,15 +55,6 @@ enum SettingsChangeClassifier {
         if old.launchAtLogin != new.launchAtLogin {
             changes.append(.launchAtLoginChanged(to: new.launchAtLogin))
         }
-        if old.requireReasonToLeave != new.requireReasonToLeave {
-            changes.append(.legacyRequireReasonChanged(to: new.requireReasonToLeave))
-        }
-        if old.allowTemporaryEscapes != new.allowTemporaryEscapes {
-            changes.append(.legacyAllowEscapesChanged(to: new.allowTemporaryEscapes))
-        }
-        if old.defaultEscapeDuration != new.defaultEscapeDuration {
-            changes.append(.legacyEscapeDurationChanged(from: old.defaultEscapeDuration, to: new.defaultEscapeDuration))
-        }
 
         return changes
     }
@@ -105,12 +96,6 @@ enum SettingsChangeClassifier {
             settings.overridePhrase = to
         case .launchAtLoginChanged(let to):
             settings.launchAtLogin = to
-        case .legacyRequireReasonChanged(let to):
-            settings.requireReasonToLeave = to
-        case .legacyAllowEscapesChanged(let to):
-            settings.allowTemporaryEscapes = to
-        case .legacyEscapeDurationChanged(_, let to):
-            settings.defaultEscapeDuration = to
         }
     }
 

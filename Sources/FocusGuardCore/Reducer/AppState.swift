@@ -1,29 +1,74 @@
 import Foundation
 
-/// Where the app is right now. Phase 1 replaces `.idle` with `.gate` and adds `.review`
-/// and `.overridden`; `.gracePeriod` disappears with the timed escape.
+/// Why the gate is up, and what to say at the top of it.
+struct GateContext: Equatable, Sendable {
+    var trigger: GateTrigger
+    var shownAt: Date
+    /// Set when a session ended while you were away, so the gate can ask about it (3.1).
+    var lastSession: LastSessionPrompt?
+    /// After a session ends, "I'm done: sleep the Mac" is the prominent action (3.1).
+    var offerSleep: Bool
+
+    init(trigger: GateTrigger, shownAt: Date, lastSession: LastSessionPrompt? = nil, offerSleep: Bool = false) {
+        self.trigger = trigger
+        self.shownAt = shownAt
+        self.lastSession = lastSession
+        self.offerSleep = offerSleep
+    }
+}
+
+struct LastSessionPrompt: Equatable, Sendable {
+    var sessionID: UUID
+    var goal: String
+    var endedAt: Date
+}
+
+enum ReviewReason: String, Codable, Equatable, Sendable {
+    case timeUp
+    case endedByUser
+}
+
+struct OverrideState: Equatable, Sendable {
+    var startedAt: Date
+    var until: Date
+    var reason: String
+    /// A session that was running when the override started. It keeps running: the
+    /// override suspends enforcement, not the commitment (3.7).
+    var suspendedSession: Session?
+}
+
+/// Where the app is. There is no "idle": you are either at the gate or in a session,
+/// except while overridden or in safe mode.
 enum AppPhase: Equatable, Sendable {
-    case idle
+    case gate(GateContext)
     case session(Session)
     case intervention(Session, Violation)
-    case gracePeriod(Session, until: Date)
+    case review(Session, ReviewReason)
+    case overridden(OverrideState)
     case safeMode(SafeModeReason)
 
     var session: Session? {
         switch self {
-        case .idle, .safeMode: return nil
         case .session(let session),
              .intervention(let session, _),
-             .gracePeriod(let session, _):
+             .review(let session, _):
             return session
+        case .gate, .overridden, .safeMode:
+            return nil
         }
     }
 
+    /// True when app switches and URLs are being policed.
     var isEnforcing: Bool {
         switch self {
         case .session, .intervention: return true
-        case .idle, .gracePeriod, .safeMode: return false
+        case .gate, .review, .overridden, .safeMode: return false
         }
+    }
+
+    var isGate: Bool {
+        if case .gate = self { return true }
+        return false
     }
 }
 
@@ -47,9 +92,10 @@ struct PermissionHealth: Equatable, Sendable, Codable {
 }
 
 struct AppState: Equatable, Sendable {
-    var phase: AppPhase = .idle
+    var phase: AppPhase = .gate(GateContext(trigger: .launch, shownAt: .distantPast))
     var settings = Settings()
     var presets: [Preset] = []
+    var recentGoals: [RecentGoal] = []
     var pendingChanges: [PendingChange] = []
     var permissions = PermissionHealth()
     var frontmostApp: AppIdentity?
@@ -59,16 +105,44 @@ struct AppState: Equatable, Sendable {
 
     var activeSession: Session? { phase.session }
 
-    var isIdle: Bool {
-        if case .idle = phase { return true }
-        return false
-    }
+    var isGated: Bool { phase.isGate }
 
     var canStartSession: Bool {
         switch phase {
-        case .idle, .safeMode: return true
-        case .session, .intervention, .gracePeriod: return false
+        case .gate, .safeMode, .overridden: return true
+        case .session, .intervention, .review: return false
         }
+    }
+
+    var overrideActive: OverrideState? {
+        if case .overridden(let state) = phase { return state }
+        return nil
+    }
+}
+
+/// A goal you have used before, offered under the gate's text field (3.3).
+struct RecentGoal: Equatable, Sendable, Codable, Identifiable {
+    var id: UUID
+    var goal: String
+    var allowedBundleIDs: [String]
+    var allowedSites: [SiteRule]
+    var duration: TimeInterval?
+    var lastUsed: Date
+
+    init(
+        id: UUID = UUID(),
+        goal: String,
+        allowedBundleIDs: [String],
+        allowedSites: [SiteRule] = [],
+        duration: TimeInterval? = nil,
+        lastUsed: Date
+    ) {
+        self.id = id
+        self.goal = goal
+        self.allowedBundleIDs = allowedBundleIDs
+        self.allowedSites = allowedSites
+        self.duration = duration
+        self.lastUsed = lastUsed
     }
 }
 

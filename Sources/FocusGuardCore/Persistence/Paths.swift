@@ -22,6 +22,7 @@ struct FocusGuardPaths: Sendable {
     var settings: URL { state.appendingPathComponent("settings.json") }
     var presets: URL { state.appendingPathComponent("presets.json") }
     var pendingChanges: URL { state.appendingPathComponent("pending-changes.json") }
+    var recentGoals: URL { state.appendingPathComponent("recent-goals.json") }
     var launchRecord: URL { state.appendingPathComponent("launches.json") }
     var heartbeat: URL { state.appendingPathComponent("heartbeat.json") }
     var hangMarker: URL { state.appendingPathComponent("hang-marker.json") }

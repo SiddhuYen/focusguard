@@ -41,6 +41,14 @@ final class StateStore: @unchecked Sendable {
         try? AtomicFile.writeJSON(presets, to: paths.presets)
     }
 
+    func loadRecentGoals() -> [RecentGoal] {
+        AtomicFile.readJSON([RecentGoal].self, from: paths.recentGoals) ?? []
+    }
+
+    func saveRecentGoals(_ recents: [RecentGoal]) {
+        try? AtomicFile.writeJSON(recents, to: paths.recentGoals)
+    }
+
     func loadPendingChanges() -> [PendingChange] {
         AtomicFile.readJSON([PendingChange].self, from: paths.pendingChanges) ?? []
     }

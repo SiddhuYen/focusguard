@@ -101,6 +101,8 @@ struct Session: Codable, Equatable, Identifiable, Sendable {
     var outcome: SessionOutcome?
     var extensionsUsed: Int
     var presetID: UUID?
+    /// Set when this full session grew out of an open one (3.2).
+    var convertedFrom: UUID?
     var violations: [Violation]
     var additions: [SessionAddition]
     var appsUsed: [AppUsage]
@@ -132,6 +134,7 @@ struct Session: Codable, Equatable, Identifiable, Sendable {
         self.outcome = nil
         self.extensionsUsed = 0
         self.presetID = presetID
+        self.convertedFrom = nil
         self.violations = []
         self.additions = []
         self.appsUsed = []

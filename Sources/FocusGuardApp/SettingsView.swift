@@ -14,9 +14,28 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Focus Rules") {
-                    Toggle("Allow temporary escapes", isOn: $sessionManager.settingsDraft.allowTemporaryEscapes)
-                    Toggle("Require a reason before escaping", isOn: $sessionManager.settingsDraft.requireReasonToLeave)
+                Section("The Gate") {
+                    Text("The gate appears when there is no session running.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Toggle("On unlock", isOn: $sessionManager.settingsDraft.gateOnUnlock)
+                    Toggle("On wake", isOn: $sessionManager.settingsDraft.gateOnWake)
+                    Toggle("On returning from idle", isOn: $sessionManager.settingsDraft.gateOnIdleReturn)
+                    Picker("Idle counts as away after", selection: $sessionManager.settingsDraft.idleThreshold) {
+                        ForEach([5.0, 10.0, 15.0, 30.0], id: \.self) { minutes in
+                            Text("\(Int(minutes)) min").tag(TimeInterval(minutes * 60))
+                        }
+                    }
+                }
+
+                Section("Sessions") {
+                    Picker("Maximum session length", selection: $sessionManager.settingsDraft.maxFullSessionLength) {
+                        ForEach([60.0, 90.0, 120.0, 180.0], id: \.self) { minutes in
+                            Text("\(Int(minutes)) min").tag(TimeInterval(minutes * 60))
+                        }
+                    }
+                    LabeledContent("Open sessions", value: "5 min, one 5 min extension")
+                    LabeledContent("Launch at login", value: SystemControl.loginItemStatus)
                 }
 
                 Section("Blocked Sites") {
@@ -51,6 +70,16 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Always Allowed") {
+                    Text("These never count as a violation, in any session. Adding to this list is a loosening change and waits 24 hours.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    ForEach(sessionManager.baselineDisplayNames, id: \.bundleID) { entry in
+                        LabeledContent(entry.name, value: entry.bundleID)
+                            .font(.caption)
+                    }
+                }
+
                 Section("Permissions") {
                     LabeledContent("Accessibility", value: sessionManager.permissions.accessibilityTrusted ? "Granted" : "Missing")
                     LabeledContent("Automation", value: sessionManager.permissions.automationAuthorized ? "Granted" : "Missing")
@@ -65,7 +94,7 @@ struct SettingsView: View {
                 }
 
                 Section("Current Status") {
-                    LabeledContent("State", value: sessionManager.menuBarTitle)
+                    LabeledContent("State", value: sessionManager.stateSummary)
                     LabeledContent("Current app", value: sessionManager.currentAppName)
 
                     if let message = sessionManager.statusMessage {

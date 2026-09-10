@@ -80,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             NSApp.setActivationPolicy(.regular)
-            _ = FocusSessionManager.shared
+            FocusSessionManager.shared.start()
         }
     }
 

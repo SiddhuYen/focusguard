@@ -66,9 +66,7 @@ enum LegacyMigration {
         }
 
         if let data = input.settingsJSON, let legacy = try? decoder.decode(LegacySettings.self, from: data) {
-            output.settings.requireReasonToLeave = legacy.requireReasonToLeave ?? false
-            output.settings.allowTemporaryEscapes = legacy.allowTemporaryEscapes ?? true
-            output.settings.defaultEscapeDuration = legacy.defaultEscapeDuration ?? 60
+            // v1's escape settings have no meaning in v2; only launch-at-login carries over.
             output.settings.launchAtLogin = legacy.launchAtLogin ?? false
             output.importedSettings = true
         }

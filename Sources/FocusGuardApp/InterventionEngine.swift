@@ -9,30 +9,31 @@ final class InterventionEngine {
     func present(
         session: Session,
         violation: Violation,
-        settings: Settings,
         permissions: PermissionHealth,
         onReturn: @escaping () -> Void,
-        onEscape: @escaping (String?) -> Void,
-        onEnd: @escaping () -> Void
+        onAdd: @escaping (String) -> Void,
+        onEnd: @escaping () -> Void,
+        onFixPermissions: @escaping () -> Void,
+        onOverride: @escaping () -> Void
     ) {
         if window != nil { dismiss() }
 
         let view = InterventionView(
             session: session,
             violation: violation,
-            settings: settings,
             permissions: permissions,
             onReturn: onReturn,
-            onEscape: onEscape,
-            onEnd: onEnd
+            onAdd: onAdd,
+            onEnd: onEnd,
+            onFixPermissions: onFixPermissions,
+            onOverride: onOverride
         )
 
-        var height: CGFloat = 320
-        if settings.requireReasonToLeave { height += 80 }
+        var height: CGFloat = 340
         if !permissions.isHealthy { height += 56 }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: height),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: height),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false

@@ -24,11 +24,6 @@ struct Settings: Codable, Equatable, Sendable {
     var overrideDuration: TimeInterval = FocusGuardConfig.current.overrideDuration
     var overridePhrase: String = FocusGuardConfig.current.overridePhrase
 
-    // Legacy fields kept so Phase 0 behaves exactly like today. Removed in Phase 1.
-    var requireReasonToLeave = false
-    var allowTemporaryEscapes = true
-    var defaultEscapeDuration: TimeInterval = 60
-
     var launchAtLogin = false
 }
 
@@ -58,9 +53,6 @@ enum SettingsChange: Codable, Equatable, Sendable {
     case overrideDurationChanged(from: TimeInterval, to: TimeInterval)
     case overridePhraseChanged(from: String, to: String)
     case launchAtLoginChanged(to: Bool)
-    case legacyRequireReasonChanged(to: Bool)
-    case legacyAllowEscapesChanged(to: Bool)
-    case legacyEscapeDurationChanged(from: TimeInterval, to: TimeInterval)
 
     /// Anything not obviously tightening defaults to loosening, per 3.8.
     var direction: ChangeDirection {
@@ -69,13 +61,11 @@ enum SettingsChange: Codable, Equatable, Sendable {
              .baselineAppRemoved,
              .gateTriggerEnabled,
              .openSessionCountdownEnabled,
-             .failClosedURLReadingEnabled,
-             .legacyAllowEscapesChanged(to: false):
+             .failClosedURLReadingEnabled:
             return .tightening
 
         case .idleThresholdChanged(let from, let to),
-             .maxFullSessionLengthChanged(let from, let to),
-             .legacyEscapeDurationChanged(let from, let to):
+             .maxFullSessionLengthChanged(let from, let to):
             return to < from ? .tightening : .loosening
 
         case .overrideCountdownChanged(let from, let to):
@@ -86,9 +76,6 @@ enum SettingsChange: Codable, Equatable, Sendable {
 
         case .overridePhraseChanged(let from, let to):
             return to.count >= from.count ? .tightening : .loosening
-
-        case .legacyRequireReasonChanged(to: true):
-            return .tightening
 
         case .launchAtLoginChanged(to: true):
             return .tightening
@@ -120,9 +107,6 @@ enum SettingsChange: Codable, Equatable, Sendable {
         case .overrideDurationChanged(_, let to): return "Override window \(Int(to / 60)) min"
         case .overridePhraseChanged: return "Change override phrase"
         case .launchAtLoginChanged(let to): return to ? "Launch at login" : "Stop launching at login"
-        case .legacyRequireReasonChanged(let to): return to ? "Require a reason to leave" : "Stop requiring a reason to leave"
-        case .legacyAllowEscapesChanged(let to): return to ? "Allow timed escapes" : "Disallow timed escapes"
-        case .legacyEscapeDurationChanged(_, let to): return "Escape length \(Int(to))s"
         }
     }
 }

@@ -37,13 +37,13 @@ struct SettingsChangeTests {
         new.blocklist.add("news.example.com")
         new.gateOnWake = false
         new.maxFullSessionLength = 3 * 3600
-        new.requireReasonToLeave = true
+        new.idleThreshold = 5 * 60
 
         let changes = SettingsChangeClassifier.diff(from: Settings(), to: new)
         #expect(changes.contains(SettingsChange.blockedDomainAdded("news.example.com")))
         #expect(changes.contains(SettingsChange.gateTriggerDisabled(.wake)))
         #expect(changes.contains(SettingsChange.maxFullSessionLengthChanged(from: 2 * 3600, to: 3 * 3600)))
-        #expect(changes.contains(SettingsChange.legacyRequireReasonChanged(to: true)))
+        #expect(changes.contains(SettingsChange.idleThresholdChanged(from: 600, to: 300)))
         #expect(changes.count == 4)
     }
 

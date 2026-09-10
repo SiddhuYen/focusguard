@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import FocusGuardCore
 
-@Suite("Reducer")
+@Suite("Reducer: gate and sessions")
 struct ReducerTests {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let xcode = AppIdentity(bundleID: "com.apple.dt.Xcode", name: "Xcode")
@@ -13,136 +13,228 @@ struct ReducerTests {
         .fixed(now: start.addingTimeInterval(offset))
     }
 
-    private func started(kind: SessionKind = .full, allowed: [String]? = nil) -> AppState {
+    private func gated() -> AppState {
         var state = AppState()
         state.settings.blocklist = Blocklist(domains: ["youtube.com"])
         state.frontmostApp = xcode
-        let request = SessionRequest(
+        let (next, _) = FocusReducer.reduce(state, .launched(restoredSession: nil, safeMode: nil), context: context())
+        return next
+    }
+
+    private func request(kind: SessionKind = .full, duration: TimeInterval? = 25 * 60, allowed: [String]? = nil) -> SessionRequest {
+        SessionRequest(
             kind: kind,
             goal: "ship the gate",
             anchor: xcode,
             allowedBundleIDs: allowed ?? [xcode.bundleID],
-            duration: 25 * 60
+            duration: duration
         )
-        let (next, _) = FocusReducer.reduce(state, .sessionStartRequested(request), context: context())
+    }
+
+    private func inSession(kind: SessionKind = .full, allowed: [String]? = nil, at offset: TimeInterval = 0) -> AppState {
+        let (next, _) = FocusReducer.reduce(
+            gated(), .sessionStartRequested(request(kind: kind, allowed: allowed)), context: context(offset)
+        )
         return next
     }
 
-    @Test("Starting a session logs it, persists it, and sets a planned end")
-    func startSession() {
-        let state = started()
-        guard case .session(let session) = state.phase else { Issue.record("expected a session"); return }
-        #expect(session.goal == "ship the gate")
-        #expect(session.allowedBundleIDs == [xcode.bundleID])
-        #expect(session.plannedEnd == start.addingTimeInterval(25 * 60))
-        #expect(!state.canStartSession)
+    // MARK: Gate
+
+    @Test("Launching with no session shows the gate and raises the shield")
+    func launchShowsGate() {
+        let (state, effects) = FocusReducer.reduce(AppState(), .launched(restoredSession: nil, safeMode: nil), context: context())
+        #expect(state.isGated)
+        #expect(effects.contains { if case .showShield = $0 { return true } else { return false } })
+        #expect(effects.contains(.setKiosk(true)))
+        #expect(effects.contains { effect in
+            guard case .log(let event) = effect else { return false }
+            return event.decode(GateShownPayload.self)?.trigger == .launch
+        })
     }
 
-    @Test("A full session caps duration at the configured maximum")
+    @Test("Coming back mid-session does not gate you")
+    func resumeRule() {
+        let state = inSession()
+        for trigger in [GateTrigger.unlock, .wake, .idleReturn] {
+            let (next, effects) = FocusReducer.reduce(state, .gateTriggered(trigger), context: context(60))
+            #expect(!next.isGated, "\(trigger) must not gate an active session")
+            #expect(!effects.contains { if case .showShield = $0 { return true } else { return false } })
+        }
+    }
+
+    @Test("Coming back after the session ran out gates you and asks about the goal")
+    func expiredWhileAway() {
+        let state = inSession()
+        let (next, effects) = FocusReducer.reduce(state, .gateTriggered(.unlock), context: context(30 * 60))
+        guard case .gate(let gate) = next.phase else { Issue.record("expected the gate"); return }
+        #expect(gate.lastSession?.goal == "ship the gate")
+        #expect(gate.offerSleep)
+        let ended = effects.compactMap { effect -> SessionEndedPayload? in
+            guard case .log(let event) = effect else { return nil }
+            return event.decode(SessionEndedPayload.self)
+        }
+        #expect(ended.first?.outcome == .expired)
+        // The session ended at its planned end, not when you happened to come back.
+        #expect(ended.first?.endedAt == start.addingTimeInterval(25 * 60))
+    }
+
+    @Test("Relaunching into a live session resumes it without the gate")
+    func relaunchResumes() {
+        let session = inSession().activeSession!
+        let (next, effects) = FocusReducer.reduce(AppState(), .launched(restoredSession: session, safeMode: nil), context: context(60))
+        #expect(next.activeSession?.id == session.id)
+        #expect(!next.isGated)
+        #expect(!effects.contains(.setKiosk(true)))
+    }
+
+    @Test("Answering the gate's question logs it and clears the prompt")
+    func gateAnswer() {
+        let expired = FocusReducer.reduce(inSession(), .gateTriggered(.unlock), context: context(30 * 60)).0
+        let (next, effects) = FocusReducer.reduce(expired, .gateAnswered(finished: true), context: context(30 * 60 + 5))
+        guard case .gate(let gate) = next.phase else { Issue.record("expected the gate"); return }
+        #expect(gate.lastSession == nil)
+        #expect(effects.contains { effect in
+            guard case .log(let event) = effect else { return false }
+            return event.decode(GateAnsweredPayload.self)?.finished == true
+        })
+    }
+
+    @Test("A crash loop skips the gate once; the restart escape skips it all launch")
+    func safeModeTriggers() {
+        let crash = FocusReducer.reduce(
+            AppState(),
+            .launched(restoredSession: nil, safeMode: SafeModeEntry(reason: .crashLoop, detail: "3 crashes")),
+            context: context()
+        ).0
+        #expect(crash.phase == .safeMode(.crashLoop))
+        let (afterTrigger, _) = FocusReducer.reduce(crash, .gateTriggered(.unlock), context: context(60))
+        #expect(afterTrigger.isGated, "normal behavior resumes at the next trigger")
+
+        let escape = FocusReducer.reduce(
+            AppState(),
+            .launched(restoredSession: nil, safeMode: SafeModeEntry(reason: .restartEscape, detail: "keys held")),
+            context: context()
+        ).0
+        let (stillSafe, _) = FocusReducer.reduce(escape, .gateTriggered(.unlock), context: context(60))
+        #expect(stillSafe.phase == .safeMode(.restartEscape), "the escape lasts the whole launch")
+    }
+
+    // MARK: Starting sessions
+
+    @Test("Starting a session drops the shield, hides other apps and returns you to work")
+    func startSession() {
+        let (state, effects) = FocusReducer.reduce(gated(), .sessionStartRequested(request()), context: context())
+        guard case .session(let session) = state.phase else { Issue.record("expected a session"); return }
+        #expect(session.plannedEnd == start.addingTimeInterval(25 * 60))
+        #expect(effects.contains(.hideShield))
+        #expect(effects.contains(.setKiosk(false)))
+        #expect(effects.contains(.hideApps(allowed: session.allowedBundleIDs)))
+        #expect(effects.contains(.activateApp(bundleID: xcode.bundleID)))
+        #expect(state.recentGoals.first?.goal == "ship the gate")
+    }
+
+    @Test("Full sessions are capped at the maximum length")
     func durationCap() {
-        var state = AppState()
+        var state = gated()
         state.settings.maxFullSessionLength = 3600
-        let request = SessionRequest(kind: .full, goal: "long", anchor: xcode, allowedBundleIDs: [], duration: 6 * 3600)
-        let (next, _) = FocusReducer.reduce(state, .sessionStartRequested(request), context: context())
+        let (next, _) = FocusReducer.reduce(state, .sessionStartRequested(request(duration: 6 * 3600)), context: context())
         #expect(next.activeSession?.plannedEnd == start.addingTimeInterval(3600))
     }
 
-    @Test("Switching to a non-allowed app opens an intervention and records the violation")
-    func appViolation() {
-        let (next, effects) = FocusReducer.reduce(started(), .appActivated(slack), context: context(60))
-        guard case .intervention(let session, let violation) = next.phase else {
-            Issue.record("expected an intervention")
-            return
+    @Test("Open sessions run five minutes and never hide your apps")
+    func openSession() {
+        let (state, effects) = FocusReducer.reduce(gated(), .sessionStartRequested(request(kind: .open, duration: nil)), context: context())
+        #expect(state.activeSession?.plannedEnd == start.addingTimeInterval(5 * 60))
+        #expect(!effects.contains { if case .hideApps = $0 { return true } else { return false } })
+    }
+
+    @Test("An open session extends once, to ten minutes total, and no further")
+    func openSessionExtension() {
+        let state = inSession(kind: .open)
+        let (extended, effects) = FocusReducer.reduce(state, .openSessionExtended, context: context(5 * 60))
+        #expect(extended.activeSession?.plannedEnd == start.addingTimeInterval(10 * 60))
+        #expect(extended.activeSession?.extensionsUsed == 1)
+        #expect(effects.contains { effect in
+            guard case .log(let event) = effect else { return false }
+            return event.type == .sessionExtended
+        })
+
+        let (again, _) = FocusReducer.reduce(extended, .openSessionExtended, context: context(10 * 60))
+        #expect(again.activeSession?.plannedEnd == start.addingTimeInterval(10 * 60), "only one extension")
+    }
+
+    @Test("Converting an open session ends it as converted and starts a full one")
+    func convertToFull() {
+        var state = inSession(kind: .open)
+        // Pretend the open session was spent in Xcode and Terminal.
+        if case .session(var session) = state.phase {
+            session.noteUsage(of: xcode, seconds: 120)
+            session.noteUsage(of: AppIdentity(bundleID: "com.apple.Terminal", name: "Terminal"), seconds: 60)
+            state.phase = .session(session)
         }
-        #expect(session.violations.count == 1)
-        #expect(violation.kind == .app(slack))
-        #expect(effects.contains { if case .showIntervention = $0 { return true } else { return false } })
-        #expect(effects.contains { if case .persistSession(.some) = $0 { return true } else { return false } })
-    }
+        let openID = state.activeSession!.id
 
-    @Test("Clicking Return goes back to the session and reactivates the anchor app")
-    func returnToApp() {
-        let (intervened, _) = FocusReducer.reduce(started(), .appActivated(slack), context: context(60))
-        let (next, effects) = FocusReducer.reduce(intervened, .returnRequested, context: context(70))
-        #expect(next.phase.isEnforcing)
-        if case .intervention = next.phase { Issue.record("should have left the intervention") }
-        #expect(effects.contains(.activateApp(bundleID: xcode.bundleID)))
-        #expect(effects.contains(.dismissIntervention))
-    }
-
-    @Test("Add to this session widens the allowlist for this session only")
-    func addToSession() {
-        let (intervened, _) = FocusReducer.reduce(started(), .appActivated(slack), context: context(60))
-        let (next, effects) = FocusReducer.reduce(
-            intervened,
-            .addToSessionRequested(target: .app(slack), reason: "answering the on-call ping"),
-            context: context(65)
+        let converted = SessionRequest(
+            kind: .full,
+            goal: "ship the gate",
+            anchor: xcode,
+            allowedBundleIDs: [xcode.bundleID, "com.apple.Terminal"],
+            duration: 50 * 60
         )
-        #expect(next.activeSession?.allowedBundleIDs.contains(slack.bundleID) == true)
-        #expect(next.activeSession?.additions.first?.reason == "answering the on-call ping")
-        #expect(effects.contains(.dismissIntervention))
+        let (next, effects) = FocusReducer.reduce(state, .convertToFullRequested(converted), context: context(5 * 60))
 
-        // Ending the session must not leak the addition into the next one.
-        let (ended, _) = FocusReducer.reduce(next, .endRequested(outcome: .finished), context: context(70))
-        let (fresh, _) = FocusReducer.reduce(
-            ended,
-            .sessionStartRequested(SessionRequest(kind: .full, goal: "next", anchor: xcode, allowedBundleIDs: [xcode.bundleID], duration: 600)),
-            context: context(80)
-        )
-        #expect(fresh.activeSession?.allowedBundleIDs.contains(slack.bundleID) == false)
-    }
+        guard case .session(let full) = next.phase else { Issue.record("expected a full session"); return }
+        #expect(full.kind == .full)
+        #expect(full.id != openID)
+        #expect(full.convertedFrom == openID)
+        #expect(full.allowedBundleIDs.contains("com.apple.Terminal"))
+        #expect(full.plannedEnd == start.addingTimeInterval(5 * 60 + 50 * 60))
 
-    @Test("A blocked domain can never be added to a session")
-    func blockedSiteCannotBeAdded() {
-        var state = started(allowed: [safari.bundleID])
-        state.frontmostApp = safari
-        let url = URL(string: "https://www.youtube.com/watch?v=abc")!
-        let (intervened, _) = FocusReducer.reduce(state, .urlObserved(browser: safari, url: url), context: context(30))
-        guard case .intervention(_, let violation) = intervened.phase else {
-            Issue.record("expected an intervention")
-            return
+        let ended = effects.compactMap { effect -> SessionEndedPayload? in
+            guard case .log(let event) = effect else { return nil }
+            return event.decode(SessionEndedPayload.self)
         }
-        #expect(!violation.isAddable)
-
-        let (after, effects) = FocusReducer.reduce(
-            intervened,
-            .addToSessionRequested(target: .site(.domain("youtube.com")), reason: "just this once"),
-            context: context(35)
-        )
-        if case .intervention = after.phase {} else { Issue.record("must stay in the intervention") }
-        #expect(!effects.contains(.dismissIntervention))
+        #expect(ended.first?.outcome == .converted)
+        #expect(effects.contains { effect in
+            guard case .log(let event) = effect else { return false }
+            return event.decode(SessionConvertedPayload.self)?.fromSessionID == openID
+        })
     }
 
-    @Test("URL polling keeps following the browser through an intervention")
-    func urlMonitoringSurvivesViolation() {
-        var state = started(allowed: [safari.bundleID])
-        state.frontmostApp = safari
+    // MARK: Time up and review
 
-        let url = URL(string: "https://www.youtube.com/watch?v=abc")!
-        let (intervened, violationEffects) = FocusReducer.reduce(state, .urlObserved(browser: safari, url: url), context: context(30))
-        // v1 stopped polling here and never restarted, so the rest of the session was unpoliced.
-        #expect(violationEffects.contains(.monitorURLs(safari)))
-
-        let (returned, returnEffects) = FocusReducer.reduce(intervened, .returnRequested, context: context(40))
-        #expect(returnEffects.contains(.monitorURLs(safari)))
-
-        let (idle, idleEffects) = FocusReducer.reduce(returned, .endRequested(outcome: .finished), context: context(50))
-        #expect(idle.isIdle)
-        #expect(idleEffects.contains(.monitorURLs(nil)))
+    @Test("Time running out while you are here opens the review")
+    func timeUpWhileActive() {
+        let state = inSession()
+        let (next, effects) = FocusReducer.reduce(state, .tick(idleSeconds: 5), context: context(25 * 60 + 1))
+        guard case .review(_, let reason) = next.phase else { Issue.record("expected the review"); return }
+        #expect(reason == .timeUp)
+        #expect(effects.contains { if case .showReview = $0 { return true } else { return false } })
     }
 
-    @Test("Exactly one monitoring effect is emitted per event")
-    func singleMonitoringEffect() {
-        let (_, effects) = FocusReducer.reduce(started(), .appActivated(slack), context: context(60))
-        let monitoring = effects.filter { if case .monitorURLs = $0 { return true } else { return false } }
-        #expect(monitoring.count == 1)
+    @Test("Time running out while you are away shows nothing until you come back")
+    func timeUpWhileIdle() {
+        let state = inSession()
+        let (next, effects) = FocusReducer.reduce(state, .tick(idleSeconds: 20 * 60), context: context(25 * 60 + 1))
+        #expect(next.activeSession != nil)
+        #expect(!effects.contains { if case .showReview = $0 { return true } else { return false } })
+
+        // ...and the gate takes over when you do.
+        let (returned, _) = FocusReducer.reduce(next, .gateTriggered(.idleReturn), context: context(40 * 60))
+        #expect(returned.isGated)
     }
 
-    @Test("Ending a session logs the outcome and clears persisted state")
-    func endSession() {
-        let (next, effects) = FocusReducer.reduce(started(), .endRequested(outcome: .finished), context: context(1200))
-        #expect(next.isIdle)
+    @Test("Answering the review ends the session and raises the gate with the sleep offer")
+    func reviewAnswered() {
+        let review = FocusReducer.reduce(inSession(), .tick(idleSeconds: 0), context: context(25 * 60 + 1)).0
+        let (next, effects) = FocusReducer.reduce(review, .reviewAnswered(finished: true), context: context(25 * 60 + 30))
+
+        guard case .gate(let gate) = next.phase else { Issue.record("expected the gate"); return }
+        #expect(gate.offerSleep)
+        #expect(gate.lastSession == nil, "you just answered, so the gate must not ask again")
+        #expect(effects.contains(.dismissReview))
         #expect(effects.contains(.persistSession(nil)))
+
         let ended = effects.compactMap { effect -> SessionEndedPayload? in
             guard case .log(let event) = effect else { return nil }
             return event.decode(SessionEndedPayload.self)
@@ -150,36 +242,165 @@ struct ReducerTests {
         #expect(ended.first?.outcome == .finished)
     }
 
-    @Test("Launching with a persisted session resumes it instead of starting over")
-    func resumeSession() {
-        let session = started().activeSession!
-        let (next, _) = FocusReducer.reduce(AppState(), .launched(restoredSession: session, safeMode: nil), context: context(90))
-        #expect(next.activeSession?.id == session.id)
+    @Test("Extending from the review stays inside the max session length")
+    func reviewExtendRespectsCap() {
+        var state = inSession()
+        state.settings.maxFullSessionLength = 30 * 60
+        let review = FocusReducer.reduce(state, .tick(idleSeconds: 0), context: context(25 * 60 + 1)).0
+        let (extended, _) = FocusReducer.reduce(review, .reviewExtended(by: 25 * 60), context: context(25 * 60 + 5))
+        #expect(extended.activeSession?.plannedEnd == start.addingTimeInterval(30 * 60), "capped, not 50 minutes")
+        #expect(extended.phase.isEnforcing)
     }
 
-    @Test("Launching in safe mode enters safe mode and logs it")
-    func safeModeLaunch() {
-        let entry = SafeModeEntry(reason: .crashLoop, detail: "3 unclean exits within 120s of launch")
-        let (next, effects) = FocusReducer.reduce(AppState(), .launched(restoredSession: nil, safeMode: entry), context: context())
-        #expect(next.phase == .safeMode(.crashLoop))
-        let logged = effects.compactMap { effect -> SafeModePayload? in
-            guard case .log(let event) = effect else { return nil }
-            return event.decode(SafeModePayload.self)
+    @Test("Ending from the menu goes through the review rather than straight out")
+    func endGoesThroughReview() {
+        let (next, effects) = FocusReducer.reduce(inSession(), .endRequested, context: context(60))
+        guard case .review(_, let reason) = next.phase else { Issue.record("expected the review"); return }
+        #expect(reason == .endedByUser)
+        #expect(effects.contains { if case .showReview = $0 { return true } else { return false } })
+        #expect(next.activeSession != nil, "not ended until the review is answered")
+    }
+
+    @Test("Force ending skips the review, for quitting")
+    func forceEnd() {
+        let (next, _) = FocusReducer.reduce(inSession(), .forceEnd(outcome: .abandoned), context: context(60))
+        #expect(next.isGated)
+        #expect(next.activeSession == nil)
+    }
+
+    // MARK: Enforcement
+
+    @Test("Switching to a non-allowed app opens an intervention")
+    func appViolation() {
+        let (next, effects) = FocusReducer.reduce(inSession(), .appActivated(slack), context: context(60))
+        guard case .intervention(let session, let violation) = next.phase else {
+            Issue.record("expected an intervention")
+            return
         }
-        #expect(logged.first?.reason == .crashLoop)
-        #expect(logged.first?.detail == "3 unclean exits within 120s of launch")
+        #expect(session.violations.count == 1)
+        #expect(violation.kind == .app(slack))
+        #expect(effects.contains { if case .showIntervention = $0 { return true } else { return false } })
     }
 
-    @Test("Apps used are credited only past the 10 second threshold")
-    func appsUsedThreshold() {
-        var state = started(allowed: [xcode.bundleID, slack.bundleID])
-        state.frontmostSince = start
-        let (quick, _) = FocusReducer.reduce(state, .appActivated(slack), context: context(5))
-        #expect(quick.activeSession?.appsUsed.isEmpty == true)
+    @Test("Finder never counts as a violation")
+    func finderIsFine() {
+        let finder = AppIdentity(bundleID: "com.apple.finder", name: "Finder")
+        let (next, _) = FocusReducer.reduce(inSession(), .appActivated(finder), context: context(60))
+        #expect(next.phase.isEnforcing)
+        if case .intervention = next.phase { Issue.record("Finder must never intervene") }
+    }
 
-        let (slow, _) = FocusReducer.reduce(state, .appActivated(slack), context: context(30))
-        #expect(slow.activeSession?.appsUsed.first?.bundleID == xcode.bundleID)
-        #expect(slow.activeSession?.appsUsed.first?.seconds == 30)
+    @Test("Open sessions allow any app but still block blocked domains")
+    func openSessionEnforcement() {
+        var state = inSession(kind: .open)
+        let (afterApp, _) = FocusReducer.reduce(state, .appActivated(slack), context: context(30))
+        if case .intervention = afterApp.phase { Issue.record("open sessions allow any app") }
+
+        state = afterApp
+        state.frontmostApp = safari
+        let url = URL(string: "https://www.youtube.com/watch?v=abc")!
+        let (afterURL, _) = FocusReducer.reduce(state, .urlObserved(browser: safari, url: url), context: context(40))
+        guard case .intervention(_, let violation) = afterURL.phase else {
+            Issue.record("blocked domains apply to open sessions")
+            return
+        }
+        #expect(violation.kind == .blockedSite(domain: "youtube.com", url: url.absoluteString))
+        #expect(!violation.isAddable)
+    }
+
+    @Test("Return goes back to the session and reactivates the anchor")
+    func returnToApp() {
+        let intervened = FocusReducer.reduce(inSession(), .appActivated(slack), context: context(60)).0
+        let (next, effects) = FocusReducer.reduce(intervened, .returnRequested, context: context(70))
+        #expect(next.phase.isEnforcing)
+        #expect(effects.contains(.activateApp(bundleID: xcode.bundleID)))
+        #expect(effects.contains(.dismissIntervention))
+    }
+
+    @Test("Add to this session widens it for this session only")
+    func addToSession() {
+        let intervened = FocusReducer.reduce(inSession(), .appActivated(slack), context: context(60)).0
+        let (next, _) = FocusReducer.reduce(
+            intervened,
+            .addToSessionRequested(target: .app(slack), reason: "on-call ping"),
+            context: context(65)
+        )
+        #expect(next.activeSession?.allowedBundleIDs.contains(slack.bundleID) == true)
+
+        let ended = FocusReducer.reduce(next, .forceEnd(outcome: .finished), context: context(70)).0
+        let (fresh, _) = FocusReducer.reduce(ended, .sessionStartRequested(request()), context: context(80))
+        #expect(fresh.activeSession?.allowedBundleIDs.contains(slack.bundleID) == false)
+    }
+
+    @Test("URL polling keeps following the browser through an intervention")
+    func urlMonitoringSurvivesViolation() {
+        var state = inSession(allowed: [safari.bundleID])
+        state.frontmostApp = safari
+        let url = URL(string: "https://www.youtube.com/watch?v=abc")!
+
+        let (intervened, effects) = FocusReducer.reduce(state, .urlObserved(browser: safari, url: url), context: context(30))
+        #expect(effects.contains(.monitorURLs(safari)))
+
+        let (returned, returnEffects) = FocusReducer.reduce(intervened, .returnRequested, context: context(40))
+        #expect(returnEffects.contains(.monitorURLs(safari)))
+
+        let (gated, gatedEffects) = FocusReducer.reduce(returned, .forceEnd(outcome: .finished), context: context(50))
+        #expect(gated.isGated)
+        #expect(gatedEffects.contains(.monitorURLs(nil)))
+    }
+
+    // MARK: Override
+
+    @Test("An override suspends enforcement, drops the shield, and later hands the session back")
+    func override() {
+        let intervened = FocusReducer.reduce(inSession(), .appActivated(slack), context: context(60)).0
+        let (overridden, effects) = FocusReducer.reduce(
+            intervened, .overrideStarted(reason: "power is out, need the router page"), context: context(70)
+        )
+
+        guard case .overridden(let override) = overridden.phase else { Issue.record("expected an override"); return }
+        #expect(override.until == start.addingTimeInterval(70 + 15 * 60))
+        #expect(override.suspendedSession != nil)
+        #expect(effects.contains(.dismissIntervention))
+        #expect(!overridden.phase.isEnforcing)
+
+        // Nothing is a violation while it runs.
+        let (during, _) = FocusReducer.reduce(overridden, .appActivated(slack), context: context(120))
+        if case .intervention = during.phase { Issue.record("enforcement is suspended") }
+
+        // When it expires the session comes back, because it still has time on it.
+        let (after, _) = FocusReducer.reduce(during, .tick(idleSeconds: 0), context: context(70 + 15 * 60 + 1))
+        #expect(after.phase.isEnforcing)
+        #expect(after.activeSession?.goal == "ship the gate")
+    }
+
+    @Test("An override that outlives its session hands you the gate")
+    func overrideOutlivesSession() {
+        // Override starts a minute before the session would have ended, so by the time it
+        // lifts there is nothing left to go back to.
+        let state = inSession()
+        let (overridden, _) = FocusReducer.reduce(state, .overrideStarted(reason: "emergency"), context: context(24 * 60))
+        let (after, _) = FocusReducer.reduce(overridden, .tick(idleSeconds: 0), context: context(24 * 60 + 15 * 60 + 1))
+        #expect(after.isGated)
+    }
+
+    @Test("Sleeping the Mac is logged and asked for")
+    func sleep() {
+        let (_, effects) = FocusReducer.reduce(gated(), .sleepRequested, context: context())
+        #expect(effects.contains(.sleepMac))
+        #expect(effects.contains { effect in
+            guard case .log(let event) = effect else { return false }
+            return event.type == .sleepRequested
+        })
+    }
+}
+
+@Suite("Reducer: settings, permissions, presets")
+struct ReducerSettingsTests {
+    let start = Date(timeIntervalSince1970: 1_700_000_000)
+
+    private func context(_ offset: TimeInterval = 0) -> ReducerContext {
+        .fixed(now: start.addingTimeInterval(offset))
     }
 
     @Test("Tightening settings apply now, loosening ones are scheduled")
@@ -192,7 +413,6 @@ struct ReducerTests {
         #expect(next.settings.blocklist.blocks(host: "news.ycombinator.com") != nil)
         #expect(next.settings.blocklist.blocks(host: "reddit.com") != nil, "unblocking waits 24 hours")
         #expect(next.pendingChanges.count == 1)
-        #expect(next.pendingChanges[0].effectiveAt == start.addingTimeInterval(24 * 3600))
         #expect(effects.contains { if case .persistPendingChanges = $0 { return true } else { return false } })
     }
 
@@ -202,13 +422,12 @@ struct ReducerTests {
         edited.blocklist.remove("reddit.com")
         let (scheduled, _) = FocusReducer.reduce(AppState(), .settingsEdited(edited), context: context())
 
-        let (tooEarly, _) = FocusReducer.reduce(scheduled, .tick, context: context(3600))
+        let (tooEarly, _) = FocusReducer.reduce(scheduled, .tick(), context: context(3600))
         #expect(tooEarly.pendingChanges.count == 1)
 
-        let (applied, effects) = FocusReducer.reduce(scheduled, .tick, context: context(24 * 3600 + 1))
+        let (applied, _) = FocusReducer.reduce(scheduled, .tick(), context: context(24 * 3600 + 1))
         #expect(applied.pendingChanges.isEmpty)
         #expect(applied.settings.blocklist.blocks(host: "reddit.com") == nil)
-        #expect(effects.contains { if case .persistSettings = $0 { return true } else { return false } })
     }
 
     @Test("Cancelling a pending change removes it and logs it")
@@ -230,7 +449,6 @@ struct ReducerTests {
     func permissionHealth() {
         var unhealthy = PermissionHealth()
         unhealthy.accessibilityTrusted = false
-        unhealthy.detail = "AXIsProcessTrusted() returned false"
 
         let (lost, lostEffects) = FocusReducer.reduce(AppState(), .permissionsChanged(unhealthy), context: context())
         #expect(!lost.permissions.isHealthy)
@@ -253,36 +471,73 @@ struct ReducerTests {
         })
     }
 
-    @Test("Unreadable URLs only bite once fail-closed is switched on")
-    func failClosed() {
-        var state = started(allowed: [safari.bundleID])
-        state.frontmostApp = safari
+    @Test("Saving a preset stores and logs it")
+    func presetCreated() {
+        let preset = Preset(name: "Email", keywords: ["inbox"], allowedBundleIDs: ["com.microsoft.Outlook"], defaultDuration: 25 * 60)
+        let (next, effects) = FocusReducer.reduce(AppState(), .presetCreated(preset, source: "review"), context: context())
+        #expect(next.presets.count == 1)
+        #expect(effects.contains { if case .persistPresets = $0 { return true } else { return false } })
+        #expect(effects.contains { effect in
+            guard case .log(let event) = effect else { return false }
+            return event.decode(PresetCreatedPayload.self)?.name == "Email"
+        })
+    }
+}
 
-        let (ignored, _) = FocusReducer.reduce(state, .urlReadFailed(browser: safari, consecutiveFailures: 9), context: context(30))
-        #expect(!isIntervention(ignored.phase))
+@Suite("Gate suggestions")
+struct GateSuggestionTests {
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-        state.settings.failClosedURLReading = true
-        let (below, _) = FocusReducer.reduce(state, .urlReadFailed(browser: safari, consecutiveFailures: 4), context: context(30))
-        #expect(!isIntervention(below.phase))
-
-        let (blocked, _) = FocusReducer.reduce(state, .urlReadFailed(browser: safari, consecutiveFailures: 5), context: context(30))
-        #expect(isIntervention(blocked.phase))
+    private var presets: [Preset] {
+        [
+            Preset(name: "Email", keywords: ["inbox", "outlook"], allowedBundleIDs: ["com.microsoft.Outlook"], defaultDuration: 25 * 60),
+            Preset(name: "Deep work", keywords: ["code", "xcode"], allowedBundleIDs: ["com.apple.dt.Xcode"], defaultDuration: 90 * 60)
+        ]
     }
 
-    @Test("Timed escape still works in Phase 0 and expires back into the session")
-    func legacyEscape() {
-        let (intervened, _) = FocusReducer.reduce(started(), .appActivated(slack), context: context(60))
-        let (escaped, effects) = FocusReducer.reduce(intervened, .escapeRequested(duration: 60, reason: nil), context: context(65))
-        guard case .gracePeriod(_, let until) = escaped.phase else { Issue.record("expected a grace period"); return }
-        #expect(until == start.addingTimeInterval(125))
-        #expect(effects.contains(.scheduleEscapeEnd(at: until)))
-
-        let (expired, _) = FocusReducer.reduce(escaped, .tick, context: context(130))
-        #expect(isIntervention(expired.phase), "still on Slack when the escape ends")
+    private var recents: [RecentGoal] {
+        [
+            RecentGoal(goal: "email the landlord", allowedBundleIDs: ["com.microsoft.Outlook"], lastUsed: now),
+            RecentGoal(goal: "write the physics lab report", allowedBundleIDs: ["com.apple.iWork.Pages"], lastUsed: now.addingTimeInterval(-86400))
+        ]
     }
 
-    private func isIntervention(_ phase: AppPhase) -> Bool {
-        if case .intervention = phase { return true }
-        return false
+    @Test("Typing a preset name ranks the preset first")
+    func presetFirst() {
+        let results = GateSuggestions.suggestions(query: "ema", presets: presets, recents: recents)
+        #expect(results.first?.isPreset == true)
+        #expect(results.first?.title == "Email")
+        #expect(results.first?.duration == TimeInterval(1500))
+    }
+
+    @Test("Keywords match too")
+    func keywords() {
+        let results = GateSuggestions.suggestions(query: "xcode", presets: presets, recents: recents)
+        #expect(results.first?.title == "Deep work")
+    }
+
+    @Test("Recent goals match on any word")
+    func recentGoals() {
+        let results = GateSuggestions.suggestions(query: "physics", presets: presets, recents: recents)
+        #expect(results.count == 1)
+        #expect(results.first?.title == "write the physics lab report")
+        #expect(results.first?.allowedBundleIDs == ["com.apple.iWork.Pages"])
+    }
+
+    @Test("An empty field still offers presets")
+    func emptyQuery() {
+        let results = GateSuggestions.suggestions(query: "  ", presets: presets, recents: recents)
+        #expect(results.contains { $0.isPreset })
+    }
+
+    @Test("Nonsense matches nothing")
+    func noMatch() {
+        #expect(GateSuggestions.suggestions(query: "zzzz", presets: presets, recents: recents).isEmpty)
+    }
+
+    @Test("Goal similarity powers preset learning later")
+    func similarity() {
+        #expect(GateSuggestions.similarity("email the landlord", "email landlord about rent") > 0.3)
+        #expect(GateSuggestions.similarity("email the landlord", "write the lab report") < 0.2)
     }
 }

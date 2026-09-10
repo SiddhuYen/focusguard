@@ -22,7 +22,7 @@ struct MainWindowView: View {
             if let session = sessionManager.activeSession {
                 ActiveSessionView(session: session)
             } else {
-                StartSessionView()
+                NoSessionView()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -46,135 +46,46 @@ private struct SafeModeBanner: View {
     }
 }
 
-// MARK: - Idle
+// MARK: - Not in a session
 
-struct StartSessionView: View {
+/// With the gate model there is no idle state: if no session is running, the gate is up
+/// (or an override is). This window then just points you back at it.
+struct NoSessionView: View {
     @EnvironmentObject private var sessionManager: FocusSessionManager
-    @FocusState private var goalFieldFocused: Bool
-    @State private var goal = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("What are you working on?")
-                    .font(.system(size: 26, weight: .semibold))
-                Text("Every stretch of time on this Mac starts with a goal.")
+        VStack(spacing: 14) {
+            Image(systemName: sessionManager.overrideState == nil ? "target" : "lock.open.trianglebadge.exclamationmark.fill")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(.secondary)
+
+            if let override = sessionManager.overrideState {
+                Text("Override active")
+                    .font(.title3.weight(.semibold))
+                Text("Enforcement is suspended until \(override.until.formatted(date: .omitted, time: .shortened)).")
                     .foregroundStyle(.secondary)
-            }
-
-            TextField("Finish the reducer, write the draft, edit the clip…", text: $goal)
-                .textFieldStyle(.plain)
-                .font(.system(size: 19))
-                .padding(12)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary))
-                .focused($goalFieldFocused)
-                .onSubmit(start)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Apps you'll need")
-                    .font(.headline)
-                AppPickerGrid()
-            }
-
-            Spacer(minLength: 0)
-
-            HStack {
-                if let hint = specificityHint {
-                    Label(hint, systemImage: "lightbulb")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("⏎")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.tertiary)
-                Button("Start Session", action: start)
+                Text(override.reason)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("End override now") { sessionManager.endOverride() }
+            } else if sessionManager.isSafeMode {
+                Text("Safe mode")
+                    .font(.title3.weight(.semibold))
+                Text("Enforcement is off for this launch. The gate returns on the next unlock or wake.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("Every stretch of time starts with a goal")
+                    .font(.title3.weight(.semibold))
+                Text("State yours at the gate to get started.")
+                    .foregroundStyle(.secondary)
+                Button("Go to the gate") { sessionManager.showGate() }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(goal.nilIfBlank == nil)
             }
         }
-        .padding(24)
-        .onAppear { goalFieldFocused = true }
-    }
-
-    /// Soft nudge only, never a block (3.3).
-    private var specificityHint: String? {
-        guard let trimmed = goal.nilIfBlank else { return nil }
-        let isVague = trimmed.count < 12 || !trimmed.contains(" ")
-        return isVague ? "What does done look like?" : nil
-    }
-
-    private func start() {
-        guard let goal = goal.nilIfBlank else { return }
-        sessionManager.startSession(goal: goal)
-        self.goal = ""
-    }
-}
-
-private struct AppPickerGrid: View {
-    @EnvironmentObject private var sessionManager: FocusSessionManager
-
-    private let columns = [GridItem(.adaptive(minimum: 132), spacing: 8)]
-
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
-                ForEach(sessionManager.pickerApps) { app in
-                    AppChip(
-                        app: app,
-                        isSelected: sessionManager.multiAppAllowedBundleIDs.contains(app.bundleIdentifier),
-                        isAllowed: Allowlist.canAllowlist(bundleID: app.bundleIdentifier)
-                    ) {
-                        sessionManager.toggleAllowed(bundleID: app.bundleIdentifier)
-                    }
-                }
-            }
-            .padding(.vertical, 2)
-        }
-        .frame(maxHeight: 150)
-    }
-}
-
-private struct AppChip: View {
-    let app: RunningApp
-    let isSelected: Bool
-    let isAllowed: Bool
-    let toggle: () -> Void
-
-    var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 7) {
-                if let icon = app.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 17, height: 17)
-                }
-                Text(app.name)
-                    .lineLimit(1)
-                    .font(.subheadline)
-                Spacer(minLength: 0)
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.tint)
-                        .font(.caption)
-                }
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(isSelected ? Color.accentColor.opacity(0.14) : Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 7))
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.5) : Color(nsColor: .separatorColor))
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(!isAllowed)
-        .opacity(isAllowed ? 1 : 0.45)
-        .help(isAllowed ? app.bundleIdentifier : "Focus Guard can't read this browser's tabs, so it can't police them.")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
     }
 }
 
@@ -226,6 +137,7 @@ struct ActiveSessionView: View {
                     sessionManager.stopFocus()
                 }
                 .controlSize(.large)
+                .help("Goes through the end-of-session review")
             }
         }
         .padding(24)

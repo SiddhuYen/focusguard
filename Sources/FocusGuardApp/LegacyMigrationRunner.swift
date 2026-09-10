@@ -30,9 +30,6 @@ enum LegacyMigrationRunner {
 
         var settings = store.loadSettings() ?? output.settings
         if output.importedSettings {
-            settings.requireReasonToLeave = output.settings.requireReasonToLeave
-            settings.allowTemporaryEscapes = output.settings.allowTemporaryEscapes
-            settings.defaultEscapeDuration = output.settings.defaultEscapeDuration
             settings.launchAtLogin = output.settings.launchAtLogin
         }
         if output.importedBlocklist {
