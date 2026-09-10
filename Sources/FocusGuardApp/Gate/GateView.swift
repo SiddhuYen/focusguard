@@ -50,7 +50,7 @@ struct GateView: View {
 
             Spacer(minLength: 0)
 
-            HStack(alignment: .bottom) {
+            HStack(alignment: .center, spacing: 12) {
                 Button("Emergency override…") { showOverride = true }
                     .buttonStyle(.link)
                     .font(.caption)
@@ -64,8 +64,19 @@ struct GateView: View {
                     } label: {
                         Label("I'm done: sleep the Mac", systemImage: "moon.zzz.fill")
                     }
-                    .controlSize(.large)
                 }
+
+                Button("Open session · 5 min") { startOpen() }
+                    .disabled(goal.nilIfBlank == nil)
+
+                // Keyboard-first does not mean keyboard-only: once you click into the app
+                // search or the site field, Return belongs to that field, and there has to
+                // be something to press.
+                Button(startLabel) { startFull() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(goal.nilIfBlank == nil)
             }
         }
         .padding(40)
@@ -125,6 +136,26 @@ struct GateView: View {
         return (trimmed.count < 12 || !trimmed.contains(" ")) ? "What does done look like?" : nil
     }
 
+    private var startLabel: String {
+        expanded ? "Start · \(Int(duration / 60)) min" : "Start session"
+    }
+
+    private func startFull() {
+        guard let goal = goal.nilIfBlank else { return }
+        if let index = highlighted {
+            accept(suggestions[index], startImmediately: true)
+            return
+        }
+        sessionManager.startFullSession(goal: goal, duration: duration)
+        reset()
+    }
+
+    private func startOpen() {
+        guard let goal = goal.nilIfBlank else { return }
+        sessionManager.startOpenSession(goal: goal)
+        reset()
+    }
+
     // MARK: - Keyboard
 
     private func move(_ delta: Int) {
@@ -142,22 +173,21 @@ struct GateView: View {
 
     private func handleReturn(shift: Bool) {
         if shift {
-            guard let goal = goal.nilIfBlank else { return }
-            sessionManager.startOpenSession(goal: goal)
-            reset()
+            startOpen()
             return
         }
 
-        if let index = highlighted {
-            accept(suggestions[index], startImmediately: true)
+        if highlighted != nil {
+            startFull()
             return
         }
 
         guard goal.nilIfBlank != nil else { return }
 
+        // First Return opens the options; the second starts. The button does the same
+        // thing, for when focus has moved elsewhere.
         if expanded {
-            sessionManager.startFullSession(goal: goal, duration: duration)
-            reset()
+            startFull()
         } else {
             expanded = true
         }

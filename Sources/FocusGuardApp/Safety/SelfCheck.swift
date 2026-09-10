@@ -221,6 +221,25 @@ enum SelfCheck {
               manager.siteInputError ?? "no error")
         manager.clearSiteInputError()
 
+        // Starting with "allow all non-blocked sites" ticked must work, and must record
+        // the choice on the session.
+        manager.removeSessionSite(SiteRule(scope: .domain, pattern: "developer.apple.com"))
+        manager.removeSessionSite(SiteRule(scope: .pinnedPage, pattern: "https://youtube.com/watch?v=lecture1"))
+        manager.allowAllNonBlockedSites = true
+        manager.startFullSession(goal: "self check allow all", duration: 10 * 60)
+        check("a browser session starts with allow-all ticked", manager.activeSession?.goal == "self check allow all")
+        check("the allow-all choice is on the session", manager.activeSession?.allowAllNonBlockedSites == true)
+        manager.send(.appActivated(safari))
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://news.ycombinator.com")!))
+        check("allow-all lets a non-blocked site through", !isIntervening(manager))
+        manager.send(.urlObserved(browser: safari, url: URL(string: "https://youtube.com/watch?v=x")!))
+        check("allow-all still blocks the blocklist", isIntervening(manager))
+        manager.send(.returnRequested)
+        manager.send(.forceEnd(outcome: .finished))
+
+        manager.toggleAllowed(bundleID: safari.bundleID)
+        manager.addSessionSite("developer.apple.com", scope: .domain)
+        manager.addSessionSite("https://www.youtube.com/watch?v=lecture1&t=30", scope: .pinnedPage)
         manager.startFullSession(goal: "self check sites", duration: 25 * 60)
         manager.send(.appActivated(safari))
         check("session carries its site list", manager.activeSession?.allowedSites.count == 2)
