@@ -3,6 +3,9 @@ import Foundation
 /// Everything the user can change. Changes run through SettingsChange so that loosening
 /// edits can be delayed 24 hours (3.8).
 struct Settings: Codable, Equatable, Sendable {
+    /// Bumped when a new setting ships with a default that existing installs should pick
+    /// up. Files written before versioning decode as 1.
+    var schemaVersion = SettingsMigration.currentVersion
     var blocklist = Blocklist()
     var baseline = BaselineAllowlist()
 
@@ -25,6 +28,60 @@ struct Settings: Codable, Equatable, Sendable {
     var overridePhrase: String = FocusGuardConfig.current.overridePhrase
 
     var launchAtLogin = false
+}
+
+extension Settings {
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, blocklist, baseline
+        case gateOnUnlock, gateOnWake, gateOnIdleReturn, idleThreshold
+        case maxFullSessionLength, openSessionCountdownEnabled, failClosedURLReading
+        case overrideCountdown, overrideDuration, overridePhrase, launchAtLogin
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Settings()
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        blocklist = try container.decodeIfPresent(Blocklist.self, forKey: .blocklist) ?? defaults.blocklist
+        baseline = try container.decodeIfPresent(BaselineAllowlist.self, forKey: .baseline) ?? defaults.baseline
+        gateOnUnlock = try container.decodeIfPresent(Bool.self, forKey: .gateOnUnlock) ?? defaults.gateOnUnlock
+        gateOnWake = try container.decodeIfPresent(Bool.self, forKey: .gateOnWake) ?? defaults.gateOnWake
+        gateOnIdleReturn = try container.decodeIfPresent(Bool.self, forKey: .gateOnIdleReturn) ?? defaults.gateOnIdleReturn
+        idleThreshold = try container.decodeIfPresent(TimeInterval.self, forKey: .idleThreshold) ?? defaults.idleThreshold
+        maxFullSessionLength = try container.decodeIfPresent(TimeInterval.self, forKey: .maxFullSessionLength) ?? defaults.maxFullSessionLength
+        openSessionCountdownEnabled = try container.decodeIfPresent(Bool.self, forKey: .openSessionCountdownEnabled) ?? defaults.openSessionCountdownEnabled
+        failClosedURLReading = try container.decodeIfPresent(Bool.self, forKey: .failClosedURLReading) ?? defaults.failClosedURLReading
+        overrideCountdown = try container.decodeIfPresent(TimeInterval.self, forKey: .overrideCountdown) ?? defaults.overrideCountdown
+        overrideDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .overrideDuration) ?? defaults.overrideDuration
+        overridePhrase = try container.decodeIfPresent(String.self, forKey: .overridePhrase) ?? defaults.overridePhrase
+        launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? defaults.launchAtLogin
+    }
+}
+
+/// Brings a stored settings file up to the current defaults. Only changes that *tighten*
+/// are applied automatically: a new default that would loosen an existing install is left
+/// alone, the same rule the 24 hour delay follows (3.8).
+enum SettingsMigration {
+    static let currentVersion = 2
+
+    struct Result: Equatable, Sendable {
+        var settings: Settings
+        var applied: [SettingsChange] = []
+    }
+
+    static func upgrade(_ stored: Settings) -> Result {
+        var result = Result(settings: stored)
+
+        if stored.schemaVersion < 2, !stored.failClosedURLReading {
+            // Shipped off during Phase 1, on by default from Phase 2. Turning it on is
+            // tightening, so it applies immediately rather than waiting.
+            result.settings.failClosedURLReading = true
+            result.applied.append(.failClosedURLReadingEnabled)
+        }
+
+        result.settings.schemaVersion = currentVersion
+        return result
+    }
 }
 
 enum ChangeDirection: String, Codable, Equatable, Sendable {

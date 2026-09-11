@@ -289,7 +289,12 @@ enum FocusReducer {
 
             if let violation = existing?.violation, !violation.isAddable {
                 effects.append(.bringInterventionToFront)
-                state.statusMessage = "Blocked sites can never be added to a session."
+                state.statusMessage = {
+                    if case .unverifiableURL = violation.kind {
+                        return "Fix the permission instead: an unreadable page can't be allowlisted."
+                    }
+                    return "Blocked sites can never be added to a session."
+                }()
                 break
             }
 

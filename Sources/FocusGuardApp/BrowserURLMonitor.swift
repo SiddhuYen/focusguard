@@ -35,6 +35,7 @@ final class BrowserURLMonitor {
     private var currentApp: RunningApp?
     private var lastURLString: String?
     private var consecutiveFailures = 0
+    private var failuresByBrowser: [String: Int] = [:]
     private var health: ReadHealth?
     fileprivate var lastScriptErrorCode: Int?
     private let pollInterval = FocusGuardConfig.current.urlPollInterval
@@ -49,7 +50,9 @@ final class BrowserURLMonitor {
         reportHealth()
         currentApp = app
         lastURLString = nil
-        consecutiveFailures = 0
+        // Resume this browser's failure run: leaving and coming back is not evidence that
+        // the page became readable.
+        consecutiveFailures = failuresByBrowser[app.bundleIdentifier] ?? 0
         health = ReadHealth(browser: app)
 
         timer?.invalidate()
@@ -66,6 +69,11 @@ final class BrowserURLMonitor {
         currentApp = nil
         lastURLString = nil
         consecutiveFailures = 0
+    }
+
+    /// Called when a session ends: the next session starts from a clean slate.
+    func resetFailureHistory() {
+        failuresByBrowser.removeAll()
     }
 
     private func reportHealth() {
@@ -85,6 +93,7 @@ final class BrowserURLMonitor {
 
         guard let urlString = fetchURLString(for: app), !urlString.isEmpty, let url = URL(string: urlString) else {
             consecutiveFailures += 1
+            failuresByBrowser[app.bundleIdentifier] = consecutiveFailures
             if var current = health {
                 current.failures += 1
                 current.longestFailureRun = max(current.longestFailureRun, consecutiveFailures)
@@ -99,6 +108,7 @@ final class BrowserURLMonitor {
 
         if consecutiveFailures > 0 { onAutomationSuccess?() }
         consecutiveFailures = 0
+        failuresByBrowser[app.bundleIdentifier] = 0
         health?.reads += 1
 
         guard urlString != lastURLString else { return }

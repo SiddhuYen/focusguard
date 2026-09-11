@@ -79,6 +79,9 @@ struct InterventionView: View {
 
                     if violation.isAddable {
                         Button("Add to this session…") { addingReason = true }
+                    } else if case .unverifiableURL = violation.kind {
+                        Button("Fix permissions…") { onFixPermissions() }
+                            .buttonStyle(.borderedProminent)
                     }
 
                     Spacer()
@@ -86,18 +89,13 @@ struct InterventionView: View {
                     Button("End session", role: .destructive) { onEnd() }
                 }
 
-                if !violation.isAddable {
+                if case .blockedSite = violation.kind {
                     Text("Blocked sites can never be added to a session.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 HStack {
-                    if case .unverifiableURL = violation.kind {
-                        Button("Fix permissions…") { onFixPermissions() }
-                            .buttonStyle(.link)
-                            .font(.caption)
-                    }
                     Spacer()
                     Button("Emergency override…") { onOverride() }
                         .buttonStyle(.link)
@@ -132,7 +130,7 @@ struct InterventionView: View {
         case .app(let app): return "You switched to \(app.name). Are you sure?"
         case .blockedSite: return "Blocked sites stay blocked in every session."
         case .unlistedSite(_, let url), .unpinnedPage(_, let url): return url
-        case .unverifiableURL(let browser): return "Reading \(browser)'s tab failed, so this page can't be checked."
+        case .unverifiableURL: return "Reading \(violation.app.name)'s tab failed, so this page can't be checked."
         }
     }
 }

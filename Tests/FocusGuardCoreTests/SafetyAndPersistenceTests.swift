@@ -254,3 +254,48 @@ struct PersistenceTests {
         #expect(reloadedPending.first?.effectiveAt.isSameInstant(as: pending.effectiveAt) == true)
     }
 }
+
+@Suite("Settings schema upgrades")
+struct SettingsMigrationTests {
+    @Test("An old file picks up a new default when that default is tighter")
+    func tighteningDefaultIsAdopted() throws {
+        // A Phase 1 file: no schemaVersion, fail-closed off.
+        let json = Data("""
+        {"failClosedURLReading":false,"maxFullSessionLength":7200,"launchAtLogin":false}
+        """.utf8)
+        let stored = try JSONCoding.decoder().decode(Settings.self, from: json)
+        #expect(stored.schemaVersion == 1)
+        #expect(!stored.failClosedURLReading)
+
+        let upgraded = SettingsMigration.upgrade(stored)
+        #expect(upgraded.settings.failClosedURLReading)
+        #expect(upgraded.applied == [.failClosedURLReadingEnabled])
+        #expect(upgraded.settings.schemaVersion == SettingsMigration.currentVersion)
+    }
+
+    @Test("Your own choices survive the upgrade")
+    func userValuesArePreserved() throws {
+        let json = Data("""
+        {"schemaVersion":1,"failClosedURLReading":false,"maxFullSessionLength":3600,"gateOnWake":false}
+        """.utf8)
+        let stored = try JSONCoding.decoder().decode(Settings.self, from: json)
+        let upgraded = SettingsMigration.upgrade(stored)
+        #expect(upgraded.settings.maxFullSessionLength == 3600, "not reset to the shipped default")
+        #expect(!upgraded.settings.gateOnWake)
+    }
+
+    @Test("A current file is left alone")
+    func currentFileUnchanged() {
+        let settings = Settings()
+        let upgraded = SettingsMigration.upgrade(settings)
+        #expect(upgraded.applied.isEmpty)
+        #expect(upgraded.settings == settings)
+    }
+
+    @Test("Missing keys fall back to defaults rather than failing to decode")
+    func partialFileDecodes() throws {
+        let stored = try JSONCoding.decoder().decode(Settings.self, from: Data("{}".utf8))
+        #expect(stored.blocklist.domains.isEmpty == false)
+        #expect(stored.idleThreshold == FocusGuardConfig.current.idleThreshold)
+    }
+}

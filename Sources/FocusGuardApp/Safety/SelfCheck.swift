@@ -273,6 +273,8 @@ enum SelfCheck {
         check("five unreadable polls is a can't-verify violation", isIntervening(manager))
         check("can't-verify names the browser",
               currentViolation(manager)?.kind == .unverifiableURL(browser: safari.bundleID))
+        check("an unreadable page offers the permission fix, not an allowlist entry",
+              currentViolation(manager)?.isAddable == false)
         manager.send(.returnRequested)
 
         manager.send(.urlReadFailed(browser: firefox, consecutiveFailures: 5))

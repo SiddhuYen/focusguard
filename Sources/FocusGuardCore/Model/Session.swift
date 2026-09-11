@@ -35,11 +35,12 @@ struct Violation: Codable, Equatable, Identifiable, Sendable {
         self.app = app
     }
 
-    /// Blocked domains can never be added to a session (3.4).
+    /// Blocked domains can never be added to a session (3.4), and an unreadable page has
+    /// nothing to add: the fix is the permission, not the allowlist (3.5).
     var isAddable: Bool {
         switch kind {
-        case .blockedSite: return false
-        case .app, .unlistedSite, .unpinnedPage, .unverifiableURL: return true
+        case .blockedSite, .unverifiableURL: return false
+        case .app, .unlistedSite, .unpinnedPage: return true
         }
     }
 }

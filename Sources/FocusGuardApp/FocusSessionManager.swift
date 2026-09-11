@@ -88,8 +88,17 @@ final class FocusSessionManager: ObservableObject {
         LegacyMigrationRunner.runIfNeeded(store: store, log: log)
 
         var initial = AppState()
-        initial.settings = store.loadSettings() ?? Settings()
+        // A stored file always beats a changed default, so new defaults have to be
+        // migrated in deliberately.
+        let upgrade = SettingsMigration.upgrade(store.loadSettings() ?? Settings())
+        initial.settings = upgrade.settings
         initial.settings.baseline.selfBundleID = BuildInfo.bundleID
+        if !upgrade.applied.isEmpty {
+            store.saveSettings(initial.settings)
+            for change in upgrade.applied {
+                log.append(SettingsChangeAppliedPayload(changeID: nil, change: change, delayed: false))
+            }
+        }
         initial.presets = store.loadPresets()
         initial.recentGoals = store.loadRecentGoals()
         initial.pendingChanges = store.loadPendingChanges()
@@ -236,6 +245,7 @@ final class FocusSessionManager: ObservableObject {
             log.append(event)
 
         case .persistSession(let session):
+            if session == nil { urlMonitor.resetFailureHistory() }
             store.saveActiveSession(session)
 
         case .persistSettings(let settings):
@@ -297,6 +307,12 @@ final class FocusSessionManager: ObservableObject {
             hideApps(except: allowed)
 
         case .monitorURLs(let app):
+            // A self-check must never drive a real browser: the AppleScript would prompt
+            // for Automation under whatever launched the binary.
+            guard !suppressDisruptiveEffects else {
+                urlMonitor.stop()
+                return
+            }
             guard let app,
                   let running = appResolver.runningApplication(bundleID: app.bundleID)
                       .flatMap(RunningApp.init(runningApplication:)) else {
