@@ -5,37 +5,38 @@ import SwiftUI
 struct ShieldRootView: View {
     @EnvironmentObject private var sessionManager: FocusSessionManager
     let isPrimary: Bool
+    /// Debug only, for offscreen rendering.
+    var demoLines: [TerminalLine]?
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(white: 0.06), Color(red: 0.09, green: 0.10, blue: 0.16)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            TerminalPalette.background.ignoresSafeArea()
 
             if isPrimary {
-                GateView()
-                    .frame(maxWidth: 720)
+                TerminalGateView(demoLines: demoLines)
             } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "target")
-                        .font(.system(size: 34, weight: .light))
-                    Text("Focus Guard")
-                        .font(.title3.weight(.medium))
-                    Text("State your goal on the main display.")
-                        .foregroundStyle(.secondary)
+                VStack(spacing: 8) {
+                    Text("focus guard")
+                        .foregroundStyle(TerminalPalette.text)
+                    Text("state your goal on the main display")
+                        .foregroundStyle(TerminalPalette.dim)
                 }
-                .foregroundStyle(.white.opacity(0.55))
+                .font(.system(size: 14, design: .monospaced))
             }
 
             #if DEBUG
             VStack {
                 HStack {
                     Spacer()
-                    Button("DEBUG: dismiss") { ShieldWindowController.shared.hide() }
-                        .padding(12)
+                    Button {
+                        ShieldWindowController.shared.hide()
+                    } label: {
+                        Text("[debug: dismiss]")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(TerminalPalette.dim)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(16)
                 }
                 Spacer()
             }

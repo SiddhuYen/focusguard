@@ -12,6 +12,13 @@ import Foundation
 enum DebugHooks {
     static func runIfRequested() {
         #if DEBUG
+        if let path = ProcessInfo.processInfo.environment["FOCUSGUARD_RENDER_GATE"], !path.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                MainActor.assumeIsolated { GateRenderer.render(to: path) }
+            }
+            return
+        }
+
         if ProcessInfo.processInfo.environment["FOCUSGUARD_SELFCHECK"] == "1" {
             // Let the app finish launching, then drive it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {

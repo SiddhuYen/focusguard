@@ -836,6 +836,10 @@ final class FocusSessionManager: ObservableObject {
 
     // MARK: - App selection
 
+    func setSelection(_ bundleIDs: [String]) {
+        multiAppAllowedBundleIDs = bundleIDs.filter { Allowlist.canAllowlist(bundleID: $0) }
+    }
+
     func toggleAllowed(bundleID: String) {
         if multiAppAllowedBundleIDs.contains(bundleID) {
             multiAppAllowedBundleIDs.removeAll { $0 == bundleID }
