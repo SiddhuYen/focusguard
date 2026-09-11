@@ -186,6 +186,7 @@ struct TerminalGateView: View {
             answerLastGoal(finished)
 
         case (.lastGoal, _):
+            write("(last goal left unanswered — it stays logged as expired)", .dim)
             stage = .goal
             submitText(trimmed)
 

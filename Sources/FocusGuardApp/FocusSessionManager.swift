@@ -42,7 +42,9 @@ final class FocusSessionManager: ObservableObject {
     private let paths = FocusGuardPaths()
     private let log: EventLogStore
     private let store: StateStore
-    private let launchGuard: LaunchGuard
+    /// Created in start(), after the single-instance lock is held. A copy that hands off to
+    /// another instance must never record a launch, or its exit reads as a crash.
+    private var launchGuard: LaunchGuard?
     private let watchdog: MainThreadWatchdog
     private let permissionMonitor = PermissionMonitor()
     private let gateTriggers = GateTriggerMonitor()
@@ -71,16 +73,15 @@ final class FocusSessionManager: ObservableObject {
     private var isTerminating = false
     private var lastKnownApp: RunningApp?
 
+    /// Deliberately inert: SwiftUI touches `shared` while building scenes, before the
+    /// single-instance lock is claimed. Anything that records a launch, migrates data or
+    /// writes settings belongs in start(), which only runs once the lock is held.
     init() {
         let paths = FocusGuardPaths()
-        try? paths.createDirectories()
         let log = EventLogStore(paths: paths)
         let store = StateStore(paths: paths)
         self.log = log
         self.store = store
-
-        // Order matters: the safe-mode decision has to happen before any window exists.
-        launchGuard = LaunchGuard(store: store, log: log)
 
         let hangPaths = paths
         watchdog = MainThreadWatchdog { unresponsive in
@@ -89,6 +90,27 @@ final class FocusSessionManager: ObservableObject {
             let marker = HangMarker(detectedAt: Date(), unresponsiveSeconds: unresponsive)
             try? AtomicFile.writeJSON(marker, to: hangPaths.hangMarker)
         }
+
+        state = AppState()
+        settingsDraft = Settings()
+        configureMonitors()
+    }
+
+    /// Test seam: drive the state machine directly from the debug self-check.
+    func send(_ event: AppEvent) { dispatch(event) }
+
+    /// Called once, from applicationWillFinishLaunching. Kept out of `init` so that
+    /// nothing an effect touches can re-enter the singleton while it is being created.
+    func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
+
+        // Order matters: the safe-mode decision has to happen before any window exists.
+        let launchGuard = LaunchGuard(store: store, log: log)
+        self.launchGuard = launchGuard
+
+        // The watchdog next: from here on a wedged main thread is recoverable.
+        watchdog.start()
 
         LegacyMigrationRunner.runIfNeeded(store: store, log: log)
 
@@ -109,7 +131,7 @@ final class FocusSessionManager: ObservableObject {
         initial.pendingChanges = store.loadPendingChanges()
         initial.permissions.accessibilityTrusted = AXIsProcessTrusted()
         state = initial
-        settingsDraft = initial.settings
+        syncSettingsDraft()
 
         if let app = appResolver.frontmostApp() {
             currentAppName = app.name
@@ -118,20 +140,6 @@ final class FocusSessionManager: ObservableObject {
             state.frontmostSince = .nowLoggable
         }
 
-        configureMonitors()
-    }
-
-    /// Test seam: drive the state machine directly from the debug self-check.
-    func send(_ event: AppEvent) { dispatch(event) }
-
-    /// Called once, from applicationWillFinishLaunching. Kept out of `init` so that
-    /// nothing an effect touches can re-enter the singleton while it is being created.
-    func start() {
-        guard !hasStarted else { return }
-        hasStarted = true
-
-        // The watchdog goes first: from here on a wedged main thread is recoverable.
-        watchdog.start()
         launchGuard.startHeartbeat()
 
         reloadHistory()
@@ -205,10 +213,10 @@ final class FocusSessionManager: ObservableObject {
     private func observeSystemEvents() {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.launchGuard.noteSystemEvent("sleep") }
+            Task { @MainActor in self?.launchGuard?.noteSystemEvent("sleep") }
         }
         center.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.launchGuard.noteSystemEvent("shutdown") }
+            Task { @MainActor in self?.launchGuard?.noteSystemEvent("shutdown") }
         }
     }
 
@@ -815,6 +823,16 @@ final class FocusSessionManager: ObservableObject {
         gateNotice = GateNotice(lines: lines.map { (text: $0.0, style: $0.1) })
     }
 
+    /// This copy was opened by hand and the login agent has started: step aside cleanly.
+    /// Every state change is already persisted, so the agent resumes exactly where this left off.
+    func yieldToAgent() {
+        isTerminating = true
+        ShieldWindowController.shared.setKiosk(false)
+        ShieldWindowController.shared.hide()
+        prepareForTermination(reason: "yielded to login agent")
+        exit(0)
+    }
+
     /// TEMPORARY testing escape (`/exit`). Stops the login agent first, or launchd would
     /// simply start Focus Guard again ten seconds later. Opening the app re-registers it.
     func exitForTesting() {
@@ -852,7 +870,7 @@ final class FocusSessionManager: ObservableObject {
         gateTriggers.stop()
         permissionMonitor.stop()
         ShieldWindowController.shared.setKiosk(false)
-        launchGuard.markCleanExit(reason: reason)
+        launchGuard?.markCleanExit(reason: reason)
     }
 
     func clearStatusMessage() {

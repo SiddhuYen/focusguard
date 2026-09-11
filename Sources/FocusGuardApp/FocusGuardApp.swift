@@ -92,8 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// happen here, before a single window exists.
     func applicationWillFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
+            // Exactly one Focus Guard. Two copies meant two gates, each with its own idea of
+            // whether a session was running. Claimed before any state or window exists.
+            guard SingleInstance.claim() else { exit(0) }
             NSApp.setActivationPolicy(.regular)
             FocusSessionManager.shared.start()
+            SingleInstance.observeYieldRequests { FocusSessionManager.shared.yieldToAgent() }
         }
     }
 
