@@ -57,6 +57,18 @@ struct OverrideView: View {
                     Text("Type it out. Pasting is not accepted.")
                         .font(.caption)
                         .foregroundStyle(.orange)
+                } else if !typed.isEmpty, !phraseMatches {
+                    Text(phrase.hasPrefix(typed.trimmingCharacters(in: .whitespaces))
+                        ? "\(phrase.count - typed.trimmingCharacters(in: .whitespaces).count) characters to go."
+                        : "That does not match yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if reason.nilIfBlank == nil {
+                    Text("A reason is required.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -95,7 +107,7 @@ struct OverrideView: View {
         countdown = sessionManager.settingsDraft.overrideCountdown
         counting = true
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        let countdownTimer = Timer(timeInterval: 1, repeats: true) { _ in
             Task { @MainActor in
                 countdown -= 1
                 if countdown <= 0 {
@@ -104,6 +116,12 @@ struct OverrideView: View {
                 }
             }
         }
+        // Registered in every mode the panel might put the run loop into, or the clock
+        // silently stops while the panel is up.
+        for mode in [RunLoop.Mode.common, .modalPanel, .eventTracking] {
+            RunLoop.main.add(countdownTimer, forMode: mode)
+        }
+        timer = countdownTimer
     }
 
     private func stop() {

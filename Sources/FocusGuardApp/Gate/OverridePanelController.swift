@@ -21,7 +21,9 @@ final class OverridePanelController: NSObject {
         panel.title = "Emergency override"
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
-        panel.level = .modalPanel
+        panel.level = ShieldWindowController.shared.currentLevel.map {
+            NSWindow.Level(rawValue: $0.rawValue + 1)
+        } ?? .modalPanel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(
             rootView: OverrideView(

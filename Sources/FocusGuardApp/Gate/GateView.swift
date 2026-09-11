@@ -11,7 +11,6 @@ struct GateView: View {
     @State private var highlighted: Int?
     @State private var expanded = false
     @State private var duration: TimeInterval = FocusGuardConfig.current.fullSessionQuickPicks[1]
-    @State private var showOverride = false
     @State private var pacingCountdown: TimeInterval = 0
     @State private var pacingGoal = ""
     @State private var pacingTimer: Timer?
@@ -71,7 +70,7 @@ struct GateView: View {
             Spacer(minLength: 0)
 
             HStack(alignment: .center, spacing: 12) {
-                Button("Emergency override…") { showOverride = true }
+                Button("Emergency override…") { sessionManager.presentOverrideFromIntervention() }
                     .buttonStyle(.link)
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.35))
@@ -102,12 +101,7 @@ struct GateView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { goalFocused = true }
-        .sheet(isPresented: $showOverride) {
-            OverrideView(onComplete: { reason in
-                showOverride = false
-                sessionManager.startOverride(reason: reason)
-            }, onCancel: { showOverride = false })
-        }
+
     }
 
     private var goalField: some View {
