@@ -25,7 +25,8 @@ struct FocusGuardApp: App {
         Window("Focus Guard Settings", id: "settings") {
             SettingsView()
                 .environmentObject(sessionManager)
-                .frame(minWidth: 480, minHeight: 460)
+                .frame(minWidth: 520, minHeight: 520)
+                .aboveShield("settings")
         }
         .defaultPosition(.center)
 
@@ -33,6 +34,7 @@ struct FocusGuardApp: App {
             DailyReviewView()
                 .environmentObject(sessionManager)
                 .frame(minWidth: 620, minHeight: 520)
+                .aboveShield("review")
         }
         .defaultPosition(.center)
 
@@ -40,6 +42,7 @@ struct FocusGuardApp: App {
             SessionHistoryView()
                 .environmentObject(sessionManager)
                 .frame(minWidth: 520, minHeight: 420)
+                .aboveShield("history")
         }
         .defaultPosition(.center)
     }

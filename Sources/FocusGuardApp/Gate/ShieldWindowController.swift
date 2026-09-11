@@ -60,6 +60,11 @@ final class ShieldWindowController: NSObject {
 
     var isVisible: Bool { windows.contains { $0.isVisible } }
 
+    /// The level the shield is sitting at, or nil when it is down.
+    var currentLevel: NSWindow.Level? {
+        isVisible ? shieldLevel : nil
+    }
+
     /// Kiosk options are release-only and only while the gate is up. An invalid
     /// combination raises an ObjC exception, so the set is fixed and checked against the
     /// documented rules: hideMenuBar and disableProcessSwitching both require hideDock.

@@ -14,6 +14,20 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Permissions") {
+                    LabeledContent("Accessibility", value: sessionManager.permissions.accessibilityTrusted ? "Granted" : "Missing")
+                    LabeledContent("Automation", value: sessionManager.permissions.automationAuthorized ? "Granted" : "Missing")
+                    HStack {
+                        if !sessionManager.permissions.accessibilityTrusted {
+                            Button("Request Accessibility…") { PermissionMonitor.promptForAccessibility() }
+                                .buttonStyle(.borderedProminent)
+                        }
+                        Button("Open Accessibility Settings") { PermissionMonitor.openAccessibilitySettings() }
+                        Button("Open Automation Settings") { PermissionMonitor.openAutomationSettings() }
+                    }
+                }
+
+
                 Section("The Gate") {
                     Text("The gate appears when there is no session running.")
                         .font(.footnote)
@@ -92,25 +106,14 @@ struct SettingsView: View {
                 }
 
                 Section("Always Allowed") {
-                    Text("These never count as a violation, in any session. Adding to this list is a loosening change and waits 24 hours.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    ForEach(sessionManager.baselineDisplayNames, id: \.bundleID) { entry in
-                        LabeledContent(entry.name, value: entry.bundleID)
-                            .font(.caption)
-                    }
-                }
-
-                Section("Permissions") {
-                    LabeledContent("Accessibility", value: sessionManager.permissions.accessibilityTrusted ? "Granted" : "Missing")
-                    LabeledContent("Automation", value: sessionManager.permissions.automationAuthorized ? "Granted" : "Missing")
-                    HStack {
-                        if !sessionManager.permissions.accessibilityTrusted {
-                            Button("Request Accessibility…") { PermissionMonitor.promptForAccessibility() }
-                                .buttonStyle(.borderedProminent)
+                    DisclosureGroup("\(sessionManager.baselineDisplayNames.count) apps never count as a violation") {
+                        Text("In any session. Adding to this list is a loosening change and waits 24 hours.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        ForEach(sessionManager.baselineDisplayNames, id: \.bundleID) { entry in
+                            LabeledContent(entry.name, value: entry.bundleID)
+                                .font(.caption)
                         }
-                        Button("Open Accessibility Settings") { PermissionMonitor.openAccessibilitySettings() }
-                        Button("Open Automation Settings") { PermissionMonitor.openAutomationSettings() }
                     }
                 }
 
@@ -144,7 +147,7 @@ struct SettingsView: View {
             .formStyle(.grouped)
         }
         .padding(22)
-        .frame(width: 500, height: 520)
+        .frame(minWidth: 500, minHeight: 520)
     }
 
     private var header: some View {
