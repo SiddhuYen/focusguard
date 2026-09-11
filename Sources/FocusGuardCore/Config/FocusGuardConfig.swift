@@ -56,5 +56,10 @@ struct FocusGuardConfig: Codable, Equatable, Sendable {
     var heartbeatInterval: TimeInterval = 30
     var heartbeatGapThreshold: TimeInterval = 120
 
+    /// TEMPORARY, for testing the UI: `/exit` at the gate quits Focus Guard and stops the
+    /// login agent, bypassing every other rule. Every use is logged and counted in the
+    /// daily review. Set to false (or delete) before relying on the gate for real.
+    static let testingExitCommandEnabled = true
+
     static let current = FocusGuardConfig()
 }

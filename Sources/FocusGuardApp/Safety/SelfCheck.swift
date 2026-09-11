@@ -398,6 +398,19 @@ enum SelfCheck {
 
         // Quitting is not a way past the gate (3.4).
         check("quitting is refused at the gate", manager.isGated && manager.quitIsBlocked)
+
+        // The refusal must not block. It used to open a modal alert behind the shield, which
+        // swallowed every keystroke and looked like a frozen gate.
+        let refusalStarted = Date()
+        manager.refuseQuit()
+        check("refusing a quit returns immediately instead of waiting on a hidden modal",
+              Date().timeIntervalSince(refusalStarted) < 0.5,
+              String(format: "%.3fs", Date().timeIntervalSince(refusalStarted)))
+        check("the refusal is said in the terminal", manager.gateNotice?.lines.contains {
+            $0.text.contains("quit refused")
+        } == true)
+        check("the refusal is logged", loggedTypes().contains(.quitBlocked))
+        check("the testing exit is compiled in, and says so", FocusGuardConfig.testingExitCommandEnabled)
         manager.toggleAllowed(bundleID: "com.apple.dt.Xcode")
         manager.startFullSession(goal: "quit rules", duration: 10 * 60)
         check("quitting a running session is allowed, with the commitment prompt", !manager.quitIsBlocked)

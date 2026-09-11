@@ -18,6 +18,7 @@ enum GateCommand: Equatable, Sendable {
     case sleep
     case answerLastGoal(finished: Bool)
     case cancel
+    case exit
     case unknown(String)
 
     /// True for commands that make sense at any prompt, not just the goal line.
@@ -71,6 +72,8 @@ enum GateCommandParser {
             return .answerLastGoal(finished: true)
         case "n", "no":
             return .answerLastGoal(finished: false)
+        case "exit", "quit":
+            return .exit
         case "c", "cancel", "clear":
             return .cancel
         default:
@@ -92,6 +95,10 @@ enum GateCommandParser {
         ("/sleep", "you're done: sleep the Mac"),
         ("/cancel", "clear the line")
     ]
+
+    /// Shown only while the testing exit is compiled in.
+    static let testingHelp: (command: String, description: String) =
+        ("/exit", "TESTING ONLY: quit Focus Guard and stop the login agent")
 
     /// Tab completion over whatever the current prompt offers.
     static func complete(_ partial: String, from candidates: [String]) -> String? {

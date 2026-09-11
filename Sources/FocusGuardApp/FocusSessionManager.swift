@@ -25,6 +25,8 @@ final class FocusSessionManager: ObservableObject {
     }
     @Published private(set) var multiAppAllowedBundleIDs: [String] = []
     @Published var allowAllNonBlockedSites = false
+    /// Out-of-band lines for the terminal gate, like a refused quit.
+    @Published private(set) var gateNotice: GateNotice?
     @Published private(set) var sessionSites: [SiteRule] = []
     @Published private(set) var siteInputError: String?
 
@@ -779,16 +781,51 @@ final class FocusSessionManager: ObservableObject {
     func refuseQuit() {
         log.append(QuitBlockedPayload(phase: stateSummary))
 
-        let alert = NSAlert()
-        alert.messageText = "Focus Guard can't be quit from here."
-        alert.informativeText = "State a goal to get back to work.\n\nIf you genuinely need out: "
-            + "use the emergency override at the gate, or restart holding "
-            + "Control-Option-Command to start up in safe mode."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Back to the gate")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
-        if let context = gateContext { ShieldWindowController.shared.show(context: context) }
+        // No modal alert: the shield sits above every alert level, so a modal opened
+        // behind it and swallowed all input, which looked like a frozen gate. The terminal
+        // says no in its own transcript instead.
+        switch state.phase {
+        case .gate(let context):
+            postGateNotice([
+                ("quit refused — the gate isn't something you quit", .warn),
+                ("state a goal, /override, or restart holding control-option-command", .dim)
+            ])
+            ShieldWindowController.shared.show(context: context)
+        case .intervention:
+            interventionEngine.bringToFront()
+        case .review:
+            ReviewPanelController.shared.show(session: state.activeSession!, reason: {
+                if case .review(_, let reason) = state.phase { return reason }
+                return .endedByUser
+            }())
+        case .session, .overridden, .safeMode:
+            break
+        }
+    }
+
+    /// Lines for the terminal gate to print, outside the normal command/response flow.
+    struct GateNotice: Equatable, Identifiable {
+        let id = UUID()
+        let lines: [(text: String, style: TerminalLine.Style)]
+
+        static func == (lhs: GateNotice, rhs: GateNotice) -> Bool { lhs.id == rhs.id }
+    }
+
+    private func postGateNotice(_ lines: [(String, TerminalLine.Style)]) {
+        gateNotice = GateNotice(lines: lines.map { (text: $0.0, style: $0.1) })
+    }
+
+    /// TEMPORARY testing escape (`/exit`). Stops the login agent first, or launchd would
+    /// simply start Focus Guard again ten seconds later. Opening the app re-registers it.
+    func exitForTesting() {
+        guard FocusGuardConfig.testingExitCommandEnabled else { return }
+        log.append(TestingExitPayload(phase: stateSummary))
+        isTerminating = true
+        ShieldWindowController.shared.setKiosk(false)
+        ShieldWindowController.shared.hide()
+        prepareForTermination(reason: "testing exit")
+        SystemControl.stopLaunchAgentForTesting()
+        exit(0)
     }
 
     /// Called from applicationShouldTerminate: true means the quit may proceed.

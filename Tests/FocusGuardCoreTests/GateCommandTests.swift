@@ -53,6 +53,13 @@ struct GateCommandTests {
         #expect(GateCommandParser.parse("/n") == .answerLastGoal(finished: false))
     }
 
+    @Test("The testing exit parses, under either name")
+    func exit() {
+        #expect(GateCommandParser.parse("/exit") == .exit)
+        #expect(GateCommandParser.parse("/quit") == .exit)
+        #expect(GateCommand.exit.isGlobal)
+    }
+
     @Test("Tab completion behaves like a shell")
     func completion() {
         let apps = ["Xcode", "Terminal", "TextEdit", "Safari"]

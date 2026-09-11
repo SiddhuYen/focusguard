@@ -89,6 +89,11 @@ struct TerminalGateView: View {
         .background(TerminalPalette.background)
         .onAppear(perform: boot)
         .onDisappear { countdownTimer?.invalidate() }
+        .onChange(of: sessionManager.gateNotice) { _, notice in
+            guard let notice else { return }
+            for line in notice.lines { write(line.text, line.style) }
+            inputFocused = true
+        }
     }
 
     private var promptLine: some View {
@@ -138,6 +143,9 @@ struct TerminalGateView: View {
             write("type /sleep when you're done for the day", .dim)
         }
         write("type a goal, or /help", .dim)
+        if FocusGuardConfig.testingExitCommandEnabled {
+            write("testing build: /exit quits and stops the login agent", .warn)
+        }
         write("", .dim)
 
         if let prompt = sessionManager.gateContext?.lastSession {
@@ -284,6 +292,10 @@ struct TerminalGateView: View {
             for entry in GateCommandParser.help {
                 write("  \(entry.command.padding(toLength: 18, withPad: " ", startingAt: 0))\(entry.description)", .output)
             }
+            if FocusGuardConfig.testingExitCommandEnabled {
+                let entry = GateCommandParser.testingHelp
+                write("  \(entry.command.padding(toLength: 18, withPad: " ", startingAt: 0))\(entry.description)", .warn)
+            }
 
         case .cancel:
             input = ""
@@ -376,6 +388,18 @@ struct TerminalGateView: View {
         case .sleep:
             write("goodnight", .success)
             sessionManager.requestSleep()
+
+        case .exit:
+            guard FocusGuardConfig.testingExitCommandEnabled else {
+                write("/exit: no such command — /help", .warn)
+                return
+            }
+            write("exiting (testing) — login agent stopped until you open Focus Guard again", .warn)
+            stage = .waiting
+            // Let the line render before the process goes.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                MainActor.assumeIsolated { sessionManager.exitForTesting() }
+            }
 
         case .unknown(let text):
             write("\(text): no such command — /help", .warn)

@@ -168,6 +168,12 @@ struct PermissionRestoredPayload: EventPayload {
     var permission: String
 }
 
+/// The temporary testing exit was used. Logged like an override so it cannot be quiet.
+struct TestingExitPayload: EventPayload {
+    static let eventType = EventType.testingExit
+    var phase: String
+}
+
 /// A quit that was refused because the gate was up (3.4).
 struct QuitBlockedPayload: EventPayload {
     static let eventType = EventType.quitBlocked

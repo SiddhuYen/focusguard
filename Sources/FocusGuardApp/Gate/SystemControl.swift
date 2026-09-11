@@ -55,6 +55,20 @@ enum SystemControl {
         #endif
     }
 
+    /// For the temporary `/exit` only. Unregistering means launchd will not respawn the
+    /// app; the next manual launch registers it again from settings.
+    static func stopLaunchAgentForTesting() {
+        #if !DEBUG
+        let service = SMAppService.agent(plistName: agentPlistName)
+        guard service.status == .enabled else { return }
+        do {
+            try service.unregister()
+        } catch {
+            NSLog("FocusGuard: could not stop the launch agent: \(error.localizedDescription)")
+        }
+        #endif
+    }
+
     static var launchAtLoginStatusLine: String {
         "Status: \(launchAgentStatus). Turning this off is a loosening change, so it waits 24 hours."
     }
