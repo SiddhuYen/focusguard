@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The gate, as a terminal. You type your goal, then answer apps and time; everything else
-/// is a slash command. Green on black, monospaced, no buttons.
+/// The gate, as a terminal. Type a goal, set what you need with commands in any order, and
+/// return on an empty line starts. Green on black, monospaced, no buttons.
 struct TerminalGateView: View {
     /// Debug only: seeds the transcript so the layout can be rendered offscreen and looked
     /// at without having to type the flow by hand.
@@ -21,11 +21,11 @@ struct TerminalGateView: View {
     @State private var countdownTimer: Timer?
     private let promptAnchor = "prompt"
 
+    /// The prompt only changes for the things that genuinely need an answer: the last
+    /// goal's question, and the two steps of the override.
     private enum Stage: Equatable {
         case lastGoal
         case goal
-        case apps
-        case duration
         case overrideReason
         case overridePhrase
         case waiting
@@ -34,8 +34,6 @@ struct TerminalGateView: View {
             switch self {
             case .lastGoal: return "finished?"
             case .goal: return "focus"
-            case .apps: return "apps"
-            case .duration: return "time"
             case .overrideReason: return "reason"
             case .overridePhrase: return "phrase"
             case .waiting: return "wait"
@@ -131,7 +129,6 @@ struct TerminalGateView: View {
 
         if let demoLines {
             lines = demoLines
-            stage = .apps
             return
         }
 
@@ -140,9 +137,9 @@ struct TerminalGateView: View {
             write("! \(sessionManager.permissions.summary) — enforcement is degraded", .error)
         }
         if sessionManager.gateContext?.offerSleep == true {
-            write("type /sleep when you're done for the day", .dim)
+            write("/sleep when you're done for the day", .dim)
         }
-        write("type a goal, or /help", .dim)
+        write("type a goal · /add <apps> · /time <minutes> · return to start · /help", .dim)
         if FocusGuardConfig.testingExitCommandEnabled {
             write("testing build: /exit quits and stops the login agent", .warn)
         }
@@ -188,19 +185,14 @@ struct TerminalGateView: View {
         case (.lastGoal, _):
             write("(last goal left unanswered — it stays logged as expired)", .dim)
             stage = .goal
-            submitText(trimmed)
+            setGoal(trimmed)
 
         case (_, .answerLastGoal):
             write("nothing to answer", .dim)
 
         case (.goal, .text(let text)):
-            submitText(text)
-
-        case (.apps, .text(let text)):
-            resolveApps(text)
-
-        case (.duration, .text(let text)):
-            resolveDuration(text)
+            // Return on an empty line starts what you have set up.
+            text.isEmpty ? startFullSession() : setGoal(text)
 
         case (.overrideReason, .text(let text)):
             guard !text.isEmpty else {
@@ -224,65 +216,29 @@ struct TerminalGateView: View {
         }
     }
 
-    private func submitText(_ text: String) {
+    private func setGoal(_ text: String) {
         guard !text.isEmpty else {
-            write("what are you working on?", .dim)
+            write("/goal needs words: /goal write the lab report", .warn)
             return
         }
         draft.goal = text
-        if draft.bundleIDs.isEmpty {
-            draft.bundleIDs = sessionManager.multiAppAllowedBundleIDs
-        }
-        let current = draft.bundleIDs.map { sessionManager.displayName(for: $0) }.joined(separator: ", ")
-        write("which apps? [\(current.isEmpty ? "current app" : current)] — tab completes, return accepts", .dim)
-        stage = .apps
+        writeDraft()
     }
 
-    private func resolveApps(_ text: String) {
-        let names = text.split(separator: " ").map(String.init)
-        if !names.isEmpty {
-            var resolved: [String] = []
-            var unknown: [String] = []
-            for name in names {
-                if let app = matchApp(name) {
-                    if Allowlist.canAllowlist(bundleID: app.bundleID) {
-                        resolved.append(app.bundleID)
-                    } else {
-                        write("\(app.name): can't read its tabs, so it can't be policed", .warn)
-                    }
-                } else {
-                    unknown.append(name)
-                }
-            }
-            if !unknown.isEmpty { write("no such app: \(unknown.joined(separator: ", "))", .warn) }
-            if !resolved.isEmpty { draft.bundleIDs = resolved }
+    /// One line showing everything the session will start with, after every change.
+    private func writeDraft() {
+        let apps = draft.bundleIDs.isEmpty
+            ? sessionManager.multiAppAllowedBundleIDs.map { sessionManager.displayName(for: $0) }
+            : draft.bundleIDs.map { sessionManager.displayName(for: $0) }
+        var parts = ["goal: \(draft.goal.isEmpty ? "—" : draft.goal)"]
+        parts.append("apps: \(apps.isEmpty ? "current app" : apps.joined(separator: ", "))")
+        parts.append("\(draft.minutes)m")
+        if draft.allowAllSites {
+            parts.append("all non-blocked sites")
+        } else if !draft.sites.isEmpty {
+            parts.append("sites: " + draft.sites.map(\.displayName).joined(separator: ", "))
         }
-
-        if draft.bundleIDs.isEmpty, let current = sessionManager.multiAppAllowedBundleIDs.first {
-            draft.bundleIDs = [current]
-        }
-
-        let named = draft.bundleIDs.map { sessionManager.displayName(for: $0) }.joined(separator: ", ")
-        write("allowed: \(named.isEmpty ? "current app" : named)", .output)
-
-        if draft.bundleIDs.contains(where: { KnownBrowser.isBrowser(bundleID: $0) }), draft.sites.isEmpty, !draft.allowAllSites {
-            write("browser included — /sites <domains> to limit it, /pin <url> for one page,", .dim)
-            write("or /sites alone to allow everything that isn't blocked", .dim)
-        }
-
-        write("how long? [\(draft.minutes)] minutes — \(quickPicks())", .dim)
-        stage = .duration
-    }
-
-    private func resolveDuration(_ text: String) {
-        if !text.isEmpty {
-            guard let minutes = Int(text), minutes > 0 else {
-                write("minutes, as a number", .warn)
-                return
-            }
-            draft.minutes = minutes
-        }
-        startFullSession()
+        write(parts.joined(separator: " · "), .dim)
     }
 
     // MARK: - Commands
@@ -298,11 +254,17 @@ struct TerminalGateView: View {
                 write("  \(entry.command.padding(toLength: 18, withPad: " ", startingAt: 0))\(entry.description)", .warn)
             }
 
+        case .goal(let text):
+            setGoal(text)
+
         case .cancel:
             input = ""
             draft = SessionDraft()
             stage = .goal
             write("cleared", .dim)
+
+        case .start:
+            startFullSession()
 
         case .quick(let goal):
             let goal = goal ?? draft.goal
@@ -335,13 +297,14 @@ struct TerminalGateView: View {
             draft.minutes = Int(preset.defaultDuration / 60)
             draft.presetID = preset.id
             if draft.goal.isEmpty { draft.goal = preset.name }
-            write("preset \(preset.name): \(draft.minutes)m · \(preset.allowedBundleIDs.map { sessionManager.displayName(for: $0) }.joined(separator: ", "))", .output)
+            write("preset \(preset.name)", .output)
             startFullSession()
 
+        case .add(let names):
+            addApps(names, replacing: false)
+
         case .apps(let names):
-            resolveApps(names.joined(separator: " "))
-            if stage == .duration, !draft.goal.isEmpty { return }
-            stage = draft.goal.isEmpty ? .goal : .duration
+            addApps(names, replacing: true)
 
         case .time(let minutes):
             guard minutes > 0 else {
@@ -349,30 +312,32 @@ struct TerminalGateView: View {
                 return
             }
             draft.minutes = minutes
-            write("length: \(minutes)m", .output)
+            writeDraft()
 
         case .sites(let domains):
             for domain in domains {
                 switch SiteRuleInput.make(from: domain, scope: .domain, blocklist: sessionManager.settingsDraft.blocklist) {
                 case .rule(let rule):
-                    draft.sites.append(rule)
-                    write("site: \(rule.displayName)", .output)
+                    if !draft.sites.contains(rule) { draft.sites.append(rule) }
+                    draft.allowAllSites = false
                 case .rejected(let reason):
                     write(reason, .warn)
                 }
             }
+            writeDraft()
 
         case .allowAllSites:
             draft.allowAllSites = true
             draft.sites = []
-            write("all non-blocked sites allowed in this session", .output)
+            writeDraft()
 
         case .pin(let url):
             switch SiteRuleInput.make(from: url, scope: .pinnedPage, blocklist: sessionManager.settingsDraft.blocklist) {
             case .rule(let rule):
-                draft.sites.append(rule)
-                write("pinned: \(rule.displayName)", .output)
-                write("only that page — the rest of the site still counts as leaving", .dim)
+                if !draft.sites.contains(rule) { draft.sites.append(rule) }
+                draft.allowAllSites = false
+                write("pinned: \(rule.displayName) — only that page, the rest of the site counts as leaving", .output)
+                writeDraft()
             case .rejected(let reason):
                 write(reason, .warn)
             }
@@ -402,12 +367,47 @@ struct TerminalGateView: View {
                 MainActor.assumeIsolated { sessionManager.exitForTesting() }
             }
 
+        case .needsArgument(let command, let hint):
+            write("\(command) needs \(hint)", .warn)
+
         case .unknown(let text):
             write("\(text): no such command — /help", .warn)
 
         case .text, .answerLastGoal:
             break
         }
+    }
+
+    private func addApps(_ names: [String], replacing: Bool) {
+        var resolved: [String] = []
+        var unknown: [String] = []
+        for name in names {
+            guard let app = matchApp(name) else {
+                unknown.append(name)
+                continue
+            }
+            guard Allowlist.canAllowlist(bundleID: app.bundleID) else {
+                write("\(app.name): can't read its tabs, so it can't be policed", .warn)
+                continue
+            }
+            resolved.append(app.bundleID)
+        }
+        if !unknown.isEmpty { write("no such app: \(unknown.joined(separator: ", "))", .warn) }
+
+        if replacing {
+            draft.bundleIDs = resolved
+        } else {
+            for bundleID in resolved where !draft.bundleIDs.contains(bundleID) {
+                draft.bundleIDs.append(bundleID)
+            }
+        }
+
+        if draft.bundleIDs.contains(where: { KnownBrowser.isBrowser(bundleID: $0) }),
+           draft.sites.isEmpty, !draft.allowAllSites {
+            write("browser included — /sites <domains> to limit it, /pin <url> for one page,", .dim)
+            write("or /sites alone to allow everything that isn't blocked", .dim)
+        }
+        writeDraft()
     }
 
     private func printStatus() {
@@ -426,8 +426,7 @@ struct TerminalGateView: View {
 
     private func startFullSession() {
         guard !draft.goal.isEmpty else {
-            write("state a goal first", .warn)
-            stage = .goal
+            write("what are you working on? type a goal, or /goal <text>", .warn)
             return
         }
 
@@ -524,14 +523,16 @@ struct TerminalGateView: View {
         let words = input.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         guard let partial = words.last, !partial.isEmpty else { return }
 
+        let verb = words.first?.lowercased() ?? ""
         let candidates: [String]
         if partial.hasPrefix("/") {
-            candidates = GateCommandParser.help.map(\.command).filter { $0.hasPrefix("/") }
-                .map { $0.split(separator: " ").first.map(String.init) ?? $0 }
-        } else if stage == .apps {
+            candidates = GateCommandParser.commandNames
+        } else if ["/add", "/a", "/apps", "/app"].contains(verb) {
             candidates = sessionManager.pickerApps.map { $0.name.replacingOccurrences(of: " ", with: "") }
-        } else {
+        } else if ["/preset", "/p"].contains(verb) {
             candidates = sessionManager.presets.map(\.name)
+        } else {
+            candidates = []
         }
 
         guard let completion = GateCommandParser.complete(partial, from: candidates) else { return }
@@ -569,10 +570,6 @@ struct TerminalGateView: View {
     private func write(_ text: String, _ style: TerminalLine.Style) {
         lines.append(TerminalLine(text: text, style: style))
         if lines.count > 400 { lines.removeFirst(lines.count - 400) }
-    }
-
-    private func quickPicks() -> String {
-        FocusGuardConfig.current.fullSessionQuickPicks.map { "\(Int($0 / 60))" }.joined(separator: " / ")
     }
 }
 

@@ -13,7 +13,7 @@ enum GateRenderer {
     private static func demoTranscript() -> [TerminalLine] {
         var lines: [TerminalLine] = [
             TerminalLine(text: "focusguard 0.2.0 (2) · gate", style: .banner),
-            TerminalLine(text: "type a goal, or /help", style: .dim),
+            TerminalLine(text: "type a goal · /add <apps> · /time <minutes> · return to start · /help", style: .dim),
             TerminalLine(text: "", style: .dim),
             TerminalLine(text: "last goal: \"ship the reducer\"", style: .output),
             TerminalLine(text: "did you finish it? y / n", style: .output),
@@ -28,23 +28,29 @@ enum GateRenderer {
                 style: .output
             ))
         }
+        let testing = GateCommandParser.testingHelp
+        lines.append(TerminalLine(
+            text: "  " + testing.command.padding(toLength: 18, withPad: " ", startingAt: 0) + testing.description,
+            style: .warn
+        ))
         lines += [
             TerminalLine(text: "focus ▸ /presets", style: .input),
             TerminalLine(text: "  /p Email         25m  Outlook, Safari", style: .output),
             TerminalLine(text: "  /p Deep work     90m  Xcode, Terminal", style: .output),
             TerminalLine(text: "focus ▸ write the physics lab report", style: .input),
-            TerminalLine(text: "which apps? [Xcode] — tab completes, return accepts", style: .dim),
-            TerminalLine(text: "apps ▸ pages safari", style: .input),
-            TerminalLine(text: "allowed: Pages, Safari", style: .output),
+            TerminalLine(text: "goal: write the physics lab report · apps: current app · 25m", style: .dim),
+            TerminalLine(text: "focus ▸ /add pages safari", style: .input),
             TerminalLine(text: "browser included — /sites <domains> to limit it, /pin <url> for one page,", style: .dim),
             TerminalLine(text: "or /sites alone to allow everything that isn't blocked", style: .dim),
-            TerminalLine(text: "apps ▸ /pin https://www.youtube.com/watch?v=lecture1&t=30", style: .input),
-            TerminalLine(text: "pinned: youtube.com/watch?v=lecture1", style: .output),
-            TerminalLine(text: "only that page — the rest of the site still counts as leaving", style: .dim),
-            TerminalLine(text: "apps ▸ /sites youtube.com", style: .input),
+            TerminalLine(text: "goal: write the physics lab report · apps: Pages, Safari · 25m", style: .dim),
+            TerminalLine(text: "focus ▸ /pin https://www.youtube.com/watch?v=lecture1&t=30", style: .input),
+            TerminalLine(text: "pinned: youtube.com/watch?v=lecture1 — only that page, the rest of the site counts as leaving", style: .output),
+            TerminalLine(text: "goal: write the physics lab report · apps: Pages, Safari · 25m · sites: youtube.com/watch?v=lecture1", style: .dim),
+            TerminalLine(text: "focus ▸ /sites youtube.com", style: .input),
             TerminalLine(text: "youtube.com is blocked and can never be allowlisted. You can pin one exact page on it instead.", style: .warn),
-            TerminalLine(text: "how long? [25] minutes — 10 / 25 / 50 / 90", style: .dim),
-            TerminalLine(text: "time ▸ 50", style: .input),
+            TerminalLine(text: "focus ▸ /time 50", style: .input),
+            TerminalLine(text: "goal: write the physics lab report · apps: Pages, Safari · 50m · sites: youtube.com/watch?v=lecture1", style: .dim),
+            TerminalLine(text: "focus ▸ ", style: .input),
             TerminalLine(text: "▸ write the physics lab report · 50m · Pages, Safari", style: .success)
         ]
         return lines
