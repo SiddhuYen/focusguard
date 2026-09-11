@@ -22,6 +22,7 @@ enum EventType: String, Codable, Equatable, Sendable, CaseIterable {
     case permissionRestored
     case urlReadHealth
     case activitySample
+    case quitBlocked
     case settingsChangeScheduled
     case settingsChangeCancelled
     case settingsChangeApplied

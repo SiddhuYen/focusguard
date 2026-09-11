@@ -168,6 +168,12 @@ struct PermissionRestoredPayload: EventPayload {
     var permission: String
 }
 
+/// A quit that was refused because the gate was up (3.4).
+struct QuitBlockedPayload: EventPayload {
+    static let eventType = EventType.quitBlocked
+    var phase: String
+}
+
 /// One window of wall-clock time and how much of it you were actually at the Mac. Summed
 /// over a day this is "active Mac time" in the review (3.11).
 struct ActivitySamplePayload: EventPayload {

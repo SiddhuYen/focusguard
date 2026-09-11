@@ -396,6 +396,18 @@ enum SelfCheck {
             }
         }
 
+        // Quitting is not a way past the gate (3.4).
+        check("quitting is refused at the gate", manager.isGated && manager.quitIsBlocked)
+        manager.toggleAllowed(bundleID: "com.apple.dt.Xcode")
+        manager.startFullSession(goal: "quit rules", duration: 10 * 60)
+        check("quitting a running session is allowed, with the commitment prompt", !manager.quitIsBlocked)
+        manager.send(.appActivated(AppIdentity(bundleID: "com.example.stray", name: "Stray")))
+        check("quitting is refused during an intervention", manager.quitIsBlocked)
+        manager.send(.returnRequested)
+        manager.send(.endRequested)
+        check("quitting is refused during the review", manager.quitIsBlocked)
+        manager.answerReview(finished: true)
+
         // Open-session pacing, off by default.
         check("open sessions have no countdown by default", manager.openSessionCountdown() == 0)
         var paced = manager.settingsDraft

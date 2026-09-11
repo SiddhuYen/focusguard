@@ -161,7 +161,8 @@ struct DailyReviewView: View {
             ProgressView(value: review.totals.coverage)
 
             Text("\(review.gateShownCount) trips through the gate"
-                + (review.sleepRequests > 0 ? " · called it a day \(review.sleepRequests)×" : ""))
+                + (review.sleepRequests > 0 ? " · called it a day \(review.sleepRequests)×" : "")
+                + (review.blockedQuits > 0 ? " · \(review.blockedQuits) refused quits" : ""))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

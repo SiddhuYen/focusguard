@@ -97,6 +97,7 @@ struct DailyReview: Equatable, Sendable {
     var additions: [Addition] = []
     var gateShownCount = 0
     var sleepRequests = 0
+    var blockedQuits = 0
 
     var fullSessions: [SessionEntry] { sessions.filter { $0.kind == .full } }
     var openSessions: [SessionEntry] { sessions.filter { $0.kind == .open } }
@@ -128,6 +129,9 @@ enum DailyReviewProjection {
 
             case .sleepRequested:
                 review.sleepRequests += 1
+
+            case .quitBlocked:
+                review.blockedQuits += 1
 
             case .activitySample:
                 guard let payload = event.decode(ActivitySamplePayload.self) else { continue }

@@ -765,6 +765,32 @@ final class FocusSessionManager: ObservableObject {
         dispatch(.addToSessionRequested(target: target, reason: reason))
     }
 
+    /// Quitting is not a way past the gate (3.4). During a session it still works,
+    /// after the commitment prompt, because ending a session deliberately is honest.
+    var quitIsBlocked: Bool {
+        switch state.phase {
+        case .gate, .intervention, .review: return true
+        case .session, .overridden, .safeMode: return false
+        }
+    }
+
+    /// Says no out loud, and records the attempt: trying to quit the gate is exactly
+    /// what the daily review should show you.
+    func refuseQuit() {
+        log.append(QuitBlockedPayload(phase: stateSummary))
+
+        let alert = NSAlert()
+        alert.messageText = "Focus Guard can't be quit from here."
+        alert.informativeText = "State a goal to get back to work.\n\nIf you genuinely need out: "
+            + "use the emergency override at the gate, or restart holding "
+            + "Control-Option-Command to start up in safe mode."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Back to the gate")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+        if let context = gateContext { ShieldWindowController.shared.show(context: context) }
+    }
+
     /// Called from applicationShouldTerminate: true means the quit may proceed.
     func confirmQuit() -> Bool {
         guard let session = state.activeSession else { return true }

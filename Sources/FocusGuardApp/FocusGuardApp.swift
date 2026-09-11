@@ -119,9 +119,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Quitting is now one Command-Q away, so it goes through the same commitment prompt
     /// as ending a session from the window.
+    /// Covers Command-Q, the Dock's Quit and the Apple menu alike.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
             let manager = FocusSessionManager.shared
+
+            // Debug builds always quit: a development build you cannot stop is a trap.
+            #if !DEBUG
+            if manager.quitIsBlocked {
+                manager.refuseQuit()
+                return .terminateCancel
+            }
+            #endif
+
             guard manager.activeSession != nil else { return .terminateNow }
             return manager.confirmQuit() ? .terminateNow : .terminateCancel
         }
