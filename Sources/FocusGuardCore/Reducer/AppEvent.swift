@@ -72,6 +72,7 @@ enum Effect: Equatable, Sendable {
 
     case showIntervention(Session, Violation)
     case bringInterventionToFront
+    case bringReviewToFront
     case dismissIntervention
 
     case activateApp(bundleID: String)

@@ -1,14 +1,21 @@
 import AppKit
 import SwiftUI
 
-/// The gate: one window per display, covering everything, with the setup UI on the main
-/// display (3.1). Debug builds are deliberately escapable (3.9.4).
+/// Covers every display, above everything. Two things use it: the gate, and the review when
+/// a session's time runs out, so neither can be worked around. Debug builds are
+/// deliberately escapable (3.9.4).
 @MainActor
 final class ShieldWindowController: NSObject {
     static let shared = ShieldWindowController()
 
+    enum Content {
+        case gate(GateContext)
+        case review(Session, ReviewReason)
+    }
+
     private var windows: [NSWindow] = []
-    private var context: GateContext?
+    private var primaryWindow: NSWindow?
+    private(set) var content: Content?
     private var screenObserver: NSObjectProtocol?
     private var debugDismissTimer: Timer?
     private var savedPresentationOptions: NSApplication.PresentationOptions?
@@ -19,18 +26,26 @@ final class ShieldWindowController: NSObject {
     }
 
     func show(context: GateContext) {
-        self.context = context
+        present(.gate(context))
+    }
+
+    func showReview(session: Session, reason: ReviewReason) {
+        present(.review(session, reason))
+    }
+
+    private func present(_ content: Content) {
+        self.content = content
 
         if windows.isEmpty {
             build()
             observeScreenChanges()
         } else {
+            // Gate to review and back swaps what is shown without taking the shield down,
+            // so there is never a moment where the desktop is reachable.
             refreshContent()
         }
 
-        for window in windows { window.orderFrontRegardless() }
-        windows.first?.makeKey()
-        NSApp.activate(ignoringOtherApps: true)
+        bringToFront()
 
         #if DEBUG
         debugDismissTimer?.invalidate()
@@ -46,12 +61,22 @@ final class ShieldWindowController: NSObject {
         #endif
     }
 
+    /// Puts the shield back in front of whatever took focus.
+    func bringToFront() {
+        guard !windows.isEmpty else { return }
+        for window in windows { window.orderFrontRegardless() }
+        primaryWindow?.makeKeyAndOrderFront(nil)
+        activate()
+    }
+
     func hide() {
         debugDismissTimer?.invalidate()
         debugDismissTimer = nil
         setKiosk(false)
         for window in windows { window.orderOut(nil) }
         windows.removeAll()
+        primaryWindow = nil
+        content = nil
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
@@ -65,7 +90,23 @@ final class ShieldWindowController: NSObject {
         isVisible ? shieldLevel : nil
     }
 
-    /// Kiosk options are release-only and only while the gate is up. An invalid
+    /// Taking focus away from whatever you are working in is the point here. Both APIs:
+    /// activate(ignoringOtherApps:) is deprecated, and the cooperative activation that
+    /// replaced it can be declined. Activation is asynchronous, so it is retried briefly.
+    private func activate(attempt: Int = 0) {
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        NSApp.activate(ignoringOtherApps: true)
+        guard attempt < 5 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.windows.isEmpty, !NSApp.isActive else { return }
+                self.primaryWindow?.makeKeyAndOrderFront(nil)
+                self.activate(attempt: attempt + 1)
+            }
+        }
+    }
+
+    /// Kiosk options are release-only and only while the shield is up. An invalid
     /// combination raises an ObjC exception, so the set is fixed and checked against the
     /// documented rules: hideMenuBar and disableProcessSwitching both require hideDock.
     func setKiosk(_ enabled: Bool) {
@@ -108,23 +149,25 @@ final class ShieldWindowController: NSObject {
             window.hasShadow = false
             window.isReleasedWhenClosed = false
 
-            window.contentView = NSHostingView(
-                rootView: ShieldRootView(isPrimary: screen == mainScreen)
-                    .environmentObject(FocusSessionManager.shared)
-            )
+            let isPrimary = screen == mainScreen
+            if isPrimary { primaryWindow = window }
+            window.contentView = hostingView(isPrimary: isPrimary)
             return window
         }
+        if primaryWindow == nil { primaryWindow = windows.first }
     }
 
     private func refreshContent() {
-        let mainScreen = NSScreen.main ?? NSScreen.screens.first
         for window in windows {
-            let isPrimary = window.screen == mainScreen || windows.count == 1
-            window.contentView = NSHostingView(
-                rootView: ShieldRootView(isPrimary: isPrimary)
-                    .environmentObject(FocusSessionManager.shared)
-            )
+            window.contentView = hostingView(isPrimary: window === primaryWindow)
         }
+    }
+
+    private func hostingView(isPrimary: Bool) -> NSView {
+        NSHostingView(
+            rootView: ShieldRootView(isPrimary: isPrimary, content: content)
+                .environmentObject(FocusSessionManager.shared)
+        )
     }
 
     private func observeScreenChanges() {
@@ -134,17 +177,18 @@ final class ShieldWindowController: NSObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isVisible, let context = self.context else { return }
-                // Plugging in a display must not leave a gap in the gate.
+                guard let self, self.isVisible, let content = self.content else { return }
+                // Plugging in a display must not leave a gap in the gate or the review.
                 for window in self.windows { window.orderOut(nil) }
                 self.windows.removeAll()
-                self.show(context: context)
+                self.primaryWindow = nil
+                self.present(content)
             }
         }
     }
 }
 
-/// Borderless windows refuse key status by default, and the goal field has to be typable.
+/// Borderless windows refuse key status by default, and the gate and review take typing.
 private final class ShieldWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }

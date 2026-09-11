@@ -57,6 +57,10 @@ final class FocusSessionManager: ObservableObject {
     private let commitmentPromptEngine = CommitmentPromptEngine()
 
     private var tickTimer: Timer?
+    private var sessionEndTimer: Timer?
+    private var scheduledSessionEnd: Date?
+    /// The self-check drives a fake clock, so it turns the wall-clock end timer off.
+    var schedulesWallClockTimers = true
     private var activityWindowStart = Date()
     private var activeSecondsInWindow: TimeInterval = 0
     private var lastTickAt = Date()
@@ -220,6 +224,30 @@ final class FocusSessionManager: ObservableObject {
         }
     }
 
+    /// The five-second tick would leave up to five seconds between time running out and the
+    /// review appearing. A one-shot timer at the planned end makes it immediate, and it is
+    /// rescheduled whenever the end moves.
+    private func scheduleSessionEndTimer() {
+        let end = state.phase.isEnforcing ? state.activeSession?.plannedEnd : nil
+        guard end != scheduledSessionEnd else { return }
+        scheduledSessionEnd = end
+        sessionEndTimer?.invalidate()
+        sessionEndTimer = nil
+        guard let end, schedulesWallClockTimers else { return }
+
+        let timer = Timer(fire: end.addingTimeInterval(0.25), interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.dispatch(.tick(idleSeconds: GateTriggerMonitor.idleSeconds()))
+            }
+        }
+        // Every mode, or it silently never fires while AppKit is tracking or a panel is up.
+        for mode in [RunLoop.Mode.common, .modalPanel, .eventTracking] {
+            RunLoop.main.add(timer, forMode: mode)
+        }
+        sessionEndTimer = timer
+    }
+
     private func startTickTimer() {
         tickTimer?.invalidate()
         tickTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -280,6 +308,7 @@ final class FocusSessionManager: ObservableObject {
             reloadHistory()
             exportDay(Date())
         }
+        scheduleSessionEndTimer()
     }
 
     private func perform(_ effect: Effect) {
@@ -319,10 +348,24 @@ final class FocusSessionManager: ObservableObject {
             ShieldWindowController.shared.setKiosk(enabled)
 
         case .showReview(let session, let reason):
-            ReviewPanelController.shared.show(session: session, reason: reason)
+            guard !isTerminating else { return }
+            MainWindowController.shared.hide()
+            interventionEngine.dismiss()
+            ShieldWindowController.shared.showReview(session: session, reason: reason)
 
         case .dismissReview:
-            ReviewPanelController.shared.dismiss()
+            // Review and gate share the shield: moving between them swaps what is shown,
+            // and only leaving both takes it down.
+            let coversScreen: Bool = {
+                switch state.phase {
+                case .gate, .review: return true
+                case .session, .intervention, .overridden, .safeMode: return false
+                }
+            }()
+            if !coversScreen { ShieldWindowController.shared.hide() }
+
+        case .bringReviewToFront:
+            ShieldWindowController.shared.bringToFront()
 
         case .showIntervention(let session, let violation):
             interventionEngine.present(
@@ -694,7 +737,6 @@ final class FocusSessionManager: ObservableObject {
 
     func extendOpenSession() {
         dispatch(.openSessionExtended)
-        ReviewPanelController.shared.dismiss()
     }
 
     func convertOpenSession(duration: TimeInterval) {
@@ -802,10 +844,7 @@ final class FocusSessionManager: ObservableObject {
         case .intervention:
             interventionEngine.bringToFront()
         case .review:
-            ReviewPanelController.shared.show(session: state.activeSession!, reason: {
-                if case .review(_, let reason) = state.phase { return reason }
-                return .endedByUser
-            }())
+            ShieldWindowController.shared.bringToFront()
         case .session, .overridden, .safeMode:
             break
         }

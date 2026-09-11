@@ -219,8 +219,13 @@ enum FocusReducer {
             if previous?.bundleID != app.bundleID { state.frontmostSince = now }
 
             switch state.phase {
-            case .gate, .review, .overridden, .safeMode:
+            case .gate, .overridden, .safeMode:
                 break
+
+            case .review:
+                // The review cannot be clicked away from: whatever you switch to, it comes
+                // straight back in front.
+                effects.append(.bringReviewToFront)
 
             case .session(var session):
                 if let previous, previous.bundleID != app.bundleID {
@@ -463,8 +468,13 @@ enum FocusReducer {
             }
         case (.review, _):
             effects.append(.dismissReview)
+            // Back to work releases kiosk. Going on to the gate keeps it, through the gate's
+            // own effects, so there is no moment where the Mac is usable in between.
+            if !new.isGate { effects.append(.setKiosk(false)) }
         case (_, .review(let session, let reason)):
             effects.append(.showReview(session, reason))
+            // As unskippable as the gate: the same shield, and kiosk in release builds.
+            effects.append(.setKiosk(true))
         default:
             break
         }
@@ -476,6 +486,9 @@ enum FocusReducer {
                 effects.append(.showShield(newContext))
                 effects.append(.setKiosk(true))
             }
+        case (.gate, .review):
+            // The review reuses the shield; taking it down here would hide the review.
+            break
         case (.gate, _):
             effects.append(.setKiosk(false))
             effects.append(.hideShield)

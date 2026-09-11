@@ -31,6 +31,7 @@ enum SelfCheck {
     static func run() {
         let manager = FocusSessionManager.shared
         manager.suppressDisruptiveEffects = true
+        manager.schedulesWallClockTimers = false
         manager.reducerContext = ReducerContext(now: { clock.now }, newID: { UUID() })
         manager.effectObserver = { effects.append($0) }
 
@@ -97,7 +98,12 @@ enum SelfCheck {
         clock.advance(26 * 60)
         manager.send(.tick(idleSeconds: 0))
         check("time up opens the review", isReviewing(manager))
-        check("review panel is on screen", panelCount(minWidth: 500) >= 1)
+        check("the review covers every display", shieldCount() == NSScreen.screens.count,
+              "\(shieldCount()) of \(NSScreen.screens.count)")
+        effects = []
+        manager.send(.appActivated(stray))
+        check("switching apps during the review pulls it straight back",
+              effects.contains(.bringReviewToFront) && isReviewing(manager))
 
         manager.extendReview(by: 10 * 60)
         check("extend returns to the session", manager.activeSession != nil && !isReviewing(manager))

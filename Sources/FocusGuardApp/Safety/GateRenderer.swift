@@ -50,6 +50,21 @@ enum GateRenderer {
         return lines
     }
 
+    /// A session that has just run out, for FOCUSGUARD_RENDER_REVIEW=1.
+    private static func sampleSession() -> Session {
+        let slack = AppIdentity(bundleID: "com.tinyspeck.slackmacgap", name: "Slack")
+        var session = Session(
+            kind: .full,
+            goal: "write the physics lab report",
+            anchor: AppIdentity(bundleID: "com.apple.iWork.Pages", name: "Pages"),
+            allowedBundleIDs: ["com.apple.iWork.Pages", "com.apple.Safari"],
+            startedAt: Date().addingTimeInterval(-50 * 60),
+            plannedEnd: Date()
+        )
+        session.violations = [Violation(kind: .app(slack), app: slack)]
+        return session
+    }
+
     static func render(to path: String, size: NSSize = NSSize(width: 1100, height: 760)) {
         let manager = FocusSessionManager.shared
         manager.suppressDisruptiveEffects = true
@@ -63,8 +78,10 @@ enum GateRenderer {
         // Offscreen: this must not flash on anyone's display.
         window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         let demo = ProcessInfo.processInfo.environment["FOCUSGUARD_RENDER_DEMO"] == "1" ? demoTranscript() : nil
+        let content: ShieldWindowController.Content? =
+            ProcessInfo.processInfo.environment["FOCUSGUARD_RENDER_REVIEW"] == "1" ? .review(sampleSession(), .timeUp) : nil
         window.contentView = NSHostingView(
-            rootView: ShieldRootView(isPrimary: true, demoLines: demo).environmentObject(manager)
+            rootView: ShieldRootView(isPrimary: true, content: content, demoLines: demo).environmentObject(manager)
         )
         window.orderFrontRegardless()
 
