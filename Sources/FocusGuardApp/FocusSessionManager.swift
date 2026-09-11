@@ -53,6 +53,9 @@ final class FocusSessionManager: ObservableObject {
     private let commitmentPromptEngine = CommitmentPromptEngine()
 
     private var tickTimer: Timer?
+    private var activityWindowStart = Date()
+    private var activeSecondsInWindow: TimeInterval = 0
+    private var lastTickAt = Date()
     private var displayTimer: Timer?
     /// Swapped for a controllable clock by the debug self-check.
     var reducerContext: ReducerContext = .live
@@ -143,7 +146,9 @@ final class FocusSessionManager: ObservableObject {
         startTickTimer()
         startDisplayTimer()
         observeSystemEvents()
-        if !suppressDisruptiveEffects { SystemControl.syncLoginItem(enabled: true) }
+        if !suppressDisruptiveEffects {
+            SystemControl.syncLaunchAgent(enabled: state.settings.launchAtLogin)
+        }
     }
 
     // MARK: - Wiring
@@ -210,9 +215,34 @@ final class FocusSessionManager: ObservableObject {
         tickTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.dispatch(.tick(idleSeconds: GateTriggerMonitor.idleSeconds()))
+                let idle = GateTriggerMonitor.idleSeconds()
+                self.sampleActivity(idleSeconds: idle)
+                self.dispatch(.tick(idleSeconds: idle))
             }
         }
+    }
+
+    /// "Active Mac time" in the review is measured, not assumed: each tick credits the
+    /// elapsed time when you were at the keyboard, flushed every five minutes so the log
+    /// stays small (3.11).
+    private func sampleActivity(idleSeconds: TimeInterval) {
+        let now = Date()
+        // Clamp: a sleeping Mac produces one enormous gap between ticks.
+        let elapsed = min(now.timeIntervalSince(lastTickAt), 15)
+        lastTickAt = now
+        if idleSeconds < 60 { activeSecondsInWindow += elapsed }
+
+        let windowSeconds = now.timeIntervalSince(activityWindowStart)
+        guard windowSeconds >= 300 else { return }
+        if activeSecondsInWindow > 0 {
+            log.append(ActivitySamplePayload(
+                windowStart: activityWindowStart.loggable,
+                windowSeconds: windowSeconds,
+                activeSeconds: activeSecondsInWindow
+            ))
+        }
+        activityWindowStart = now
+        activeSecondsInWindow = 0
     }
 
     private func startDisplayTimer() {
@@ -236,7 +266,10 @@ final class FocusSessionManager: ObservableObject {
             effectObserver?(effect)
             perform(effect)
         }
-        if wasEnded { reloadHistory() }
+        if wasEnded {
+            reloadHistory()
+            exportDay(Date())
+        }
     }
 
     private func perform(_ effect: Effect) {
@@ -250,6 +283,9 @@ final class FocusSessionManager: ObservableObject {
 
         case .persistSettings(let settings):
             store.saveSettings(settings)
+            if !suppressDisruptiveEffects {
+                SystemControl.syncLaunchAgent(enabled: settings.launchAtLogin)
+            }
 
         case .persistPendingChanges(let changes):
             store.savePendingChanges(changes)
@@ -458,6 +494,76 @@ final class FocusSessionManager: ObservableObject {
                 return "\(name): \(Int(rate * 100))% of reads succeeded"
             }
             .joined(separator: " · ")
+    }
+
+    // MARK: - Daily review
+
+    func dailyReview(for date: Date) -> DailyReview {
+        let calendar = Calendar.current
+        let events = log.events(on: date)
+        let priorEnd = previousSessionEnd(before: calendar.startOfDay(for: date))
+        return DailyReviewProjection.review(date: date, events: events, priorSessionEnd: priorEnd)
+    }
+
+    private func previousSessionEnd(before start: Date) -> Date? {
+        guard let dayBefore = Calendar.current.date(byAdding: .day, value: -1, to: start) else { return nil }
+        return log.events(on: dayBefore)
+            .compactMap { $0.decode(SessionEndedPayload.self)?.endedAt }
+            .max()
+    }
+
+    /// Writes ~/Library/Application Support/FocusGuard/exports/YYYY-MM-DD.json (3.11).
+    @discardableResult
+    func exportDay(_ date: Date) -> URL? {
+        let export = DailyExport(review: dailyReview(for: date))
+        let url = paths.exportFile(for: date)
+        do {
+            try AtomicFile.writeJSON(export, to: url)
+            return url
+        } catch {
+            state.statusMessage = "Export failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// "You've done this three times. Save it as a preset?" (3.11)
+    func presetSuggestion(for session: Session) -> PresetSuggestion? {
+        let events = log.allEvents()
+        let history = PresetLearning.learnedSessions(from: events)
+        let current = LearnedSession(
+            id: session.id,
+            kind: session.kind,
+            goal: session.goal,
+            startedAt: session.startedAt,
+            seconds: session.elapsed,
+            appBundleIDs: session.appsUsed.isEmpty ? session.allowedBundleIDs : session.appsUsed.map(\.bundleID),
+            domains: session.domainsVisited
+        )
+        return PresetLearning.suggestion(
+            for: current,
+            history: history,
+            presets: state.presets,
+            blocklist: state.settings.blocklist,
+            now: reducerContext.now()
+        )
+    }
+
+    func acceptPresetSuggestion(_ suggestion: PresetSuggestion) {
+        dispatch(.presetCreated(suggestion.asPreset(), source: "learned"))
+        log.append(PresetSuggestedPayload(name: suggestion.name, accepted: true))
+    }
+
+    func declinePresetSuggestion(_ suggestion: PresetSuggestion) {
+        log.append(PresetSuggestedPayload(name: suggestion.name, accepted: false))
+    }
+
+    /// How long the escalating countdown makes you wait before an open session (3.2).
+    func openSessionCountdown() -> TimeInterval {
+        OpenSessionPacing.countdown(
+            recentStarts: OpenSessionPacing.recentOpenSessionStarts(from: log.events(on: Date())),
+            now: reducerContext.now(),
+            settings: state.settings
+        )
     }
 
     func suggestions(for query: String) -> [Suggestion] {

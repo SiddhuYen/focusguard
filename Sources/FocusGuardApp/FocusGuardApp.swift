@@ -29,6 +29,13 @@ struct FocusGuardApp: App {
         }
         .defaultPosition(.center)
 
+        Window("Daily Review", id: "review") {
+            DailyReviewView()
+                .environmentObject(sessionManager)
+                .frame(minWidth: 620, minHeight: 520)
+        }
+        .defaultPosition(.center)
+
         Window("Session History", id: "history") {
             SessionHistoryView()
                 .environmentObject(sessionManager)
@@ -66,6 +73,9 @@ struct FocusGuardCommands: Commands {
                 .disabled(sessionManager.activeSession == nil)
 
             Divider()
+
+            Button("Daily Review") { openWindow(id: "review") }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
 
             Button("Session History") { openWindow(id: "history") }
                 .keyboardShortcut("y", modifiers: .command)

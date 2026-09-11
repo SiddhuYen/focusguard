@@ -27,7 +27,7 @@ struct Settings: Codable, Equatable, Sendable {
     var overrideDuration: TimeInterval = FocusGuardConfig.current.overrideDuration
     var overridePhrase: String = FocusGuardConfig.current.overridePhrase
 
-    var launchAtLogin = false
+    var launchAtLogin = true
 }
 
 extension Settings {
@@ -62,7 +62,7 @@ extension Settings {
 /// are applied automatically: a new default that would loosen an existing install is left
 /// alone, the same rule the 24 hour delay follows (3.8).
 enum SettingsMigration {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     struct Result: Equatable, Sendable {
         var settings: Settings
@@ -71,6 +71,13 @@ enum SettingsMigration {
 
     static func upgrade(_ stored: Settings) -> Result {
         var result = Result(settings: stored)
+
+        if stored.schemaVersion < 3, !stored.launchAtLogin {
+            // The gate cannot gate anything if it is not running at login. Turning this on
+            // is tightening, so it applies rather than waiting.
+            result.settings.launchAtLogin = true
+            result.applied.append(.launchAtLoginChanged(to: true))
+        }
 
         if stored.schemaVersion < 2, !stored.failClosedURLReading {
             // Shipped off during Phase 1, on by default from Phase 2. Turning it on is

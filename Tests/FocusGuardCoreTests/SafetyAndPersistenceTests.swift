@@ -269,14 +269,17 @@ struct SettingsMigrationTests {
 
         let upgraded = SettingsMigration.upgrade(stored)
         #expect(upgraded.settings.failClosedURLReading)
-        #expect(upgraded.applied == [.failClosedURLReadingEnabled])
+        #expect(upgraded.applied.contains(.failClosedURLReadingEnabled))
+        // Running at login became the default in the same way, and both are tightening.
+        #expect(upgraded.settings.launchAtLogin)
+        #expect(upgraded.applied.contains(.launchAtLoginChanged(to: true)))
         #expect(upgraded.settings.schemaVersion == SettingsMigration.currentVersion)
     }
 
     @Test("Your own choices survive the upgrade")
     func userValuesArePreserved() throws {
         let json = Data("""
-        {"schemaVersion":1,"failClosedURLReading":false,"maxFullSessionLength":3600,"gateOnWake":false}
+        {"schemaVersion":1,"failClosedURLReading":false,"maxFullSessionLength":3600,"gateOnWake":false,"launchAtLogin":true}
         """.utf8)
         let stored = try JSONCoding.decoder().decode(Settings.self, from: json)
         let upgraded = SettingsMigration.upgrade(stored)

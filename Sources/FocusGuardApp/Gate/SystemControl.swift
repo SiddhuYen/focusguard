@@ -32,13 +32,17 @@ enum SystemControl {
         return true
     }
 
-    /// Release builds register as a login item so the gate is there at login. Debug builds
-    /// never do: a development build must not be able to wedge itself into every boot.
-    static func syncLoginItem(enabled: Bool) {
+    static let agentPlistName = "app.focusguard.mvp.agent.plist"
+
+    /// Release builds register a KeepAlive LaunchAgent, so the gate is there at login and
+    /// a killed Focus Guard comes back and resumes the session (3.10). Debug builds never
+    /// register: a development build must not be able to wedge itself into every boot, or
+    /// respawn itself while you are trying to stop it.
+    static func syncLaunchAgent(enabled: Bool) {
         #if DEBUG
         return
         #else
-        let service = SMAppService.mainApp
+        let service = SMAppService.agent(plistName: agentPlistName)
         do {
             if enabled {
                 if service.status != .enabled { try service.register() }
@@ -46,20 +50,24 @@ enum SystemControl {
                 try service.unregister()
             }
         } catch {
-            NSLog("FocusGuard: login item update failed: \(error.localizedDescription)")
+            NSLog("FocusGuard: launch agent update failed: \(error.localizedDescription)")
         }
         #endif
     }
 
-    static var loginItemStatus: String {
+    static var launchAtLoginStatusLine: String {
+        "Status: \(launchAgentStatus). Turning this off is a loosening change, so it waits 24 hours."
+    }
+
+    static var launchAgentStatus: String {
         #if DEBUG
-        return "Disabled in debug builds"
+        return "Off in debug builds"
         #else
-        switch SMAppService.mainApp.status {
-        case .enabled: return "Enabled"
-        case .requiresApproval: return "Needs approval in System Settings → Login Items"
+        switch SMAppService.agent(plistName: agentPlistName).status {
+        case .enabled: return "Running as a login agent"
+        case .requiresApproval: return "Needs approval in System Settings → General → Login Items"
         case .notRegistered: return "Not registered"
-        case .notFound: return "Not found"
+        case .notFound: return "Not found (is the app in /Applications?)"
         @unknown default: return "Unknown"
         }
         #endif

@@ -35,7 +35,10 @@ struct SettingsView: View {
                         }
                     }
                     LabeledContent("Open sessions", value: "5 min, one 5 min extension")
-                    LabeledContent("Launch at login", value: SystemControl.loginItemStatus)
+                    Toggle("Keep Focus Guard running (login agent)", isOn: $sessionManager.settingsDraft.launchAtLogin)
+                    Text(SystemControl.launchAtLoginStatusLine)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Browsers") {

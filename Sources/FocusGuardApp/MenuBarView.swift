@@ -53,6 +53,12 @@ struct MenuBarView: View {
             }
 
             Button {
+                openWindow(id: "review")
+            } label: {
+                Label("Daily Review", systemImage: "calendar")
+            }
+
+            Button {
                 openWindow(id: "history")
             } label: {
                 Label("Session History", systemImage: "clock.arrow.circlepath")

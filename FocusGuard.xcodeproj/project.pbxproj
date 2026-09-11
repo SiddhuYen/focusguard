@@ -6,7 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FG00000000000000000901 /* app.focusguard.mvp.agent.plist in Embed LaunchAgent */ = {isa = PBXBuildFile; fileRef = FG00000000000000000104 /* app.focusguard.mvp.agent.plist */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		FG00000000000000000104 /* app.focusguard.mvp.agent.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = app.focusguard.mvp.agent.plist; sourceTree = "<group>"; };
 		FG00000000000000000101 /* FocusGuard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FocusGuard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FG00000000000000000102 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		FG00000000000000000103 /* FocusGuard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FocusGuard.entitlements; sourceTree = "<group>"; };
@@ -43,8 +48,17 @@
 			children = (
 				FG00000000000000000102 /* Info.plist */,
 				FG00000000000000000103 /* FocusGuard.entitlements */,
+				FG00000000000000000105 /* LaunchAgents */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		FG00000000000000000105 /* LaunchAgents */ = {
+			isa = PBXGroup;
+			children = (
+				FG00000000000000000104 /* app.focusguard.mvp.agent.plist */,
+			);
+			path = LaunchAgents;
 			sourceTree = "<group>";
 		};
 		FG00000000000000000403 /* Products */ = {
@@ -65,6 +79,7 @@
 				FG00000000000000000701 /* Sources */,
 				FG00000000000000000301 /* Frameworks */,
 				FG00000000000000000702 /* Resources */,
+				FG00000000000000000703 /* Embed LaunchAgent */,
 			);
 			buildRules = (
 			);
@@ -112,6 +127,20 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		FG00000000000000000703 /* Embed LaunchAgent */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchAgents;
+			dstSubfolderSpec = 1;
+			files = (
+				FG00000000000000000901 /* app.focusguard.mvp.agent.plist in Embed LaunchAgent */,
+			);
+			name = "Embed LaunchAgent";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXResourcesBuildPhase section */
 		FG00000000000000000702 /* Resources */ = {

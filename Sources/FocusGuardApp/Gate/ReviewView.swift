@@ -12,6 +12,8 @@ struct ReviewView: View {
     @State private var convertDuration = FocusGuardConfig.current.fullSessionQuickPicks[1]
     @State private var presetName = ""
     @State private var savingPreset = false
+    @State private var learned: PresetSuggestion?
+    @State private var learnedDismissed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -33,6 +35,20 @@ struct ReviewView: View {
                 }
             }
 
+            if let learned, !learnedDismissed, !converting, !savingPreset {
+                LearnedPresetPrompt(
+                    suggestion: learned,
+                    onSave: {
+                        sessionManager.acceptPresetSuggestion(learned)
+                        learnedDismissed = true
+                    },
+                    onDismiss: {
+                        sessionManager.declinePresetSuggestion(learned)
+                        learnedDismissed = true
+                    }
+                )
+            }
+
             if converting {
                 convertControls
             } else if savingPreset {
@@ -47,6 +63,9 @@ struct ReviewView: View {
         }
         .padding(24)
         .frame(width: 540)
+        .onAppear {
+            if session.kind == .open { learned = sessionManager.presetSuggestion(for: session) }
+        }
     }
 
     private var headline: String {
@@ -178,6 +197,34 @@ struct ReviewView: View {
                 .disabled(presetName.nilIfBlank == nil)
             }
         }
+    }
+}
+
+/// Three of the same five minute task in a fortnight is a routine, not a one-off.
+private struct LearnedPresetPrompt: View {
+    let suggestion: PresetSuggestion
+    let onSave: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lightbulb.fill")
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("You've done this \(suggestion.matchCount) times. Save it as a preset?")
+                    .font(.subheadline.weight(.medium))
+                Text("“\(suggestion.name)” · \(suggestion.allowedBundleIDs.count) apps · \(Int(suggestion.duration / 60)) min")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Not now", action: onDismiss)
+            Button("Save preset", action: onSave)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(12)
+        .background(Color.yellow.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

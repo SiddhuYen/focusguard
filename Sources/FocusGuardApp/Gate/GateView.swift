@@ -12,6 +12,9 @@ struct GateView: View {
     @State private var expanded = false
     @State private var duration: TimeInterval = FocusGuardConfig.current.fullSessionQuickPicks[1]
     @State private var showOverride = false
+    @State private var pacingCountdown: TimeInterval = 0
+    @State private var pacingGoal = ""
+    @State private var pacingTimer: Timer?
 
     private var suggestions: [Suggestion] {
         sessionManager.suggestions(for: goal)
@@ -33,6 +36,23 @@ struct GateView: View {
                     .foregroundStyle(.white)
 
                 goalField
+            }
+
+            if pacingCountdown > 0 {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("That's another quick session. Starting in \(Int(ceil(pacingCountdown)))s…")
+                        .foregroundStyle(.white.opacity(0.8))
+                    Spacer()
+                    Button("Cancel") {
+                        pacingTimer?.invalidate()
+                        pacingTimer = nil
+                        pacingCountdown = 0
+                    }
+                }
+                .padding(12)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
             if !suggestions.isEmpty {
@@ -152,8 +172,29 @@ struct GateView: View {
 
     private func startOpen() {
         guard let goal = goal.nilIfBlank else { return }
-        sessionManager.startOpenSession(goal: goal)
-        reset()
+
+        // Chaining "quick" sessions is the pattern this guards against, so the wait grows
+        // with how many you have already started this hour (3.2).
+        let wait = sessionManager.openSessionCountdown()
+        guard wait > 0 else {
+            sessionManager.startOpenSession(goal: goal)
+            reset()
+            return
+        }
+
+        pacingGoal = goal
+        pacingCountdown = wait
+        pacingTimer?.invalidate()
+        pacingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            Task { @MainActor in
+                pacingCountdown -= 1
+                guard pacingCountdown <= 0 else { return }
+                pacingTimer?.invalidate()
+                pacingTimer = nil
+                sessionManager.startOpenSession(goal: pacingGoal)
+                reset()
+            }
+        }
     }
 
     // MARK: - Keyboard
@@ -217,6 +258,10 @@ struct GateView: View {
         goal = ""
         highlighted = nil
         expanded = false
+        pacingCountdown = 0
+        pacingGoal = ""
+        pacingTimer?.invalidate()
+        pacingTimer = nil
     }
 }
 

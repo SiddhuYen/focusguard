@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>app.focusguard.mvp.agent</string>
+	<!-- Relative to the app bundle; SMAppService resolves it. -->
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/FocusGuard</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- The point of the agent: a killed Focus Guard comes back and resumes the session. -->
+	<key>KeepAlive</key>
+	<true/>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>app.focusguard.mvp</string>
+	</array>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+</dict>
+</plist>

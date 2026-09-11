@@ -291,6 +291,8 @@ enum SelfCheck {
               !recentSites.contains { $0.pattern.contains("youtube") },
               recentSites.map(\.pattern).joined(separator: ","))
 
+        runPhase3Checks(manager: manager)
+
         // Settings: tightening now, loosening in 24 hours.
         var edited = manager.settingsDraft
         edited.blocklist.add("news.example.com")
@@ -324,6 +326,89 @@ enum SelfCheck {
         manager.cancelPendingChange(manager.pendingChanges[0].id)
         check("cancelling is instant", manager.pendingChanges.isEmpty)
         check("cancellation logged", loggedTypes().contains(.settingsChangeCancelled))
+    }
+
+    // MARK: - Phase 3: review, export, learning, pacing
+
+    private static func runPhase3Checks(manager: FocusSessionManager) {
+        let today = clock.now
+
+        // The review has to agree with what the log says happened.
+        let review = manager.dailyReview(for: today)
+        check("review finds today's sessions", review.sessions.count >= 4, "\(review.sessions.count) sessions")
+        check("review splits full and open", !review.fullSessions.isEmpty && !review.openSessions.isEmpty,
+              "\(review.fullSessions.count) full, \(review.openSessions.count) open")
+        check("review counts violations", review.sessions.reduce(0) { $0 + $1.violations } > 0)
+        check("review lists mid-session additions with reasons",
+              review.additions.contains { $0.reason == "self check" },
+              review.additions.map(\.reason).joined(separator: ","))
+        check("review lists the override with its reason",
+              review.overrides.contains { $0.reason == "self check override" })
+        check("review counts trips through the gate", review.gateShownCount > 0, "\(review.gateShownCount)")
+
+        // Chains: the self-check starts open sessions back to back.
+        let chained = review.openSessions.filter(\.chainedFromPrevious)
+        check("chained open sessions are flagged", !chained.isEmpty || review.openSessions.count < 2,
+              "\(chained.count) of \(review.openSessions.count) open sessions chained")
+
+        // Totals: sessions cannot claim more time than the day holds.
+        check("session time is not longer than the day",
+              review.totals.sessionSeconds <= 86400, "\(Int(review.totals.sessionSeconds))s")
+        check("coverage is a fraction", (0...1).contains(review.totals.coverage), "\(review.totals.coverage)")
+
+        // Export.
+        guard let url = manager.exportDay(today) else {
+            check("export writes a file", false)
+            return
+        }
+        check("export writes a file", FileManager.default.fileExists(atPath: url.path), url.lastPathComponent)
+        if let data = try? Data(contentsOf: url),
+           let export = try? JSONCoding.decoder().decode(DailyExport.self, from: data) {
+            check("export agrees with the review", export.sessionCount == review.sessions.count,
+                  "export \(export.sessionCount) vs review \(review.sessions.count)")
+            check("export names the day", export.date == FocusGuardPaths.dayStamp(for: today), export.date)
+            check("export records coverage", export.coverage >= 0)
+        } else {
+            check("export is readable JSON", false)
+        }
+
+        // Preset learning: three similar open sessions inside the window.
+        let outlook = AppIdentity(bundleID: "com.microsoft.Outlook", name: "Outlook")
+        for index in 0..<3 {
+            manager.startOpenSession(goal: "email the landlord \(index)")
+            manager.send(.appActivated(outlook))
+            clock.advance(60)
+            manager.send(.forceEnd(outcome: .finished))
+        }
+        if let last = manager.sessionHistory.first {
+            var session = Session(
+                id: last.id, kind: .open, goal: "email the landlord again",
+                anchor: outlook, allowedBundleIDs: [outlook.bundleID], startedAt: clock.now
+            )
+            session.noteUsage(of: outlook, seconds: 120)
+            let suggestion = manager.presetSuggestion(for: session)
+            check("three similar open sessions earn a preset suggestion", suggestion != nil,
+                  suggestion?.name ?? "none")
+            if let suggestion {
+                manager.acceptPresetSuggestion(suggestion)
+                check("accepting the suggestion saves the preset",
+                      manager.presets.contains { $0.name == suggestion.name })
+            }
+        }
+
+        // Open-session pacing, off by default.
+        check("open sessions have no countdown by default", manager.openSessionCountdown() == 0)
+        var paced = manager.settingsDraft
+        paced.openSessionCountdownEnabled = true
+        manager.settingsDraft = paced
+        check("enabling the countdown applies immediately", manager.settingsDraft.openSessionCountdownEnabled)
+        check("after several quick sessions the countdown bites", manager.openSessionCountdown() > 0,
+              "\(Int(manager.openSessionCountdown()))s")
+        paced.openSessionCountdownEnabled = false
+        manager.settingsDraft = paced
+        check("turning the countdown off waits 24 hours",
+              manager.settingsDraft.openSessionCountdownEnabled)
+        for pending in manager.pendingChanges { manager.cancelPendingChange(pending.id) }
     }
 
     // MARK: - Checking

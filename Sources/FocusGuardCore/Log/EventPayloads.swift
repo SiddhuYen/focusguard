@@ -168,6 +168,15 @@ struct PermissionRestoredPayload: EventPayload {
     var permission: String
 }
 
+/// One window of wall-clock time and how much of it you were actually at the Mac. Summed
+/// over a day this is "active Mac time" in the review (3.11).
+struct ActivitySamplePayload: EventPayload {
+    static let eventType = EventType.activitySample
+    var windowStart: Date
+    var windowSeconds: TimeInterval
+    var activeSeconds: TimeInterval
+}
+
 /// How often we could actually read a browser's address bar. Fail-closed enforcement is
 /// only as fair as this number, and for Firefox it is measured rather than assumed (3.5).
 struct URLReadHealthPayload: EventPayload {
