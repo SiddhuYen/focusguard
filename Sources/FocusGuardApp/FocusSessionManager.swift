@@ -774,6 +774,32 @@ final class FocusSessionManager: ObservableObject {
         dispatch(.endRequested)
     }
 
+    /// Saves what is set up at the gate as a preset. Presets carry apps, sites and a length,
+    /// never the goal itself (3.3); the goal only seeds keywords for suggestions. Returns why
+    /// it could not be saved, or nil.
+    func savePreset(
+        named name: String,
+        bundleIDs: [String],
+        sites: [SiteRule],
+        minutes: Int,
+        goal: String
+    ) -> String? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let problem = PresetCommands.problem(withNewName: name, existing: state.presets) { return problem }
+        let apps = bundleIDs.isEmpty ? Array(multiAppAllowedBundleIDs.prefix(1)) : bundleIDs
+        guard !apps.isEmpty else { return "add at least one app first: /add <apps>" }
+
+        let preset = Preset(
+            name: name,
+            keywords: Array(GateSuggestions.tokens(goal)),
+            allowedBundleIDs: apps,
+            allowedSites: sites,
+            defaultDuration: TimeInterval(minutes * 60)
+        )
+        dispatch(.presetCreated(preset, source: "gate"))
+        return nil
+    }
+
     func savePreset(named name: String, from session: Session) {
         guard let name = name.nilIfBlank else { return }
         let preset = Preset(

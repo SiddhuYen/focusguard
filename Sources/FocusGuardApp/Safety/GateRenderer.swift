@@ -34,9 +34,18 @@ enum GateRenderer {
             style: .warn
         ))
         lines += [
-            TerminalLine(text: "focus ▸ /presets", style: .input),
-            TerminalLine(text: "  /p Email         25m  Outlook, Safari", style: .output),
-            TerminalLine(text: "  /p Deep work     90m  Xcode, Terminal", style: .output),
+            TerminalLine(text: "your presets", style: .banner),
+            TerminalLine(text: "  /email            25m · Outlook, Safari", style: .output),
+            TerminalLine(text: "  /deepwork         90m · Xcode, Terminal", style: .output),
+            TerminalLine(text: "focus ▸ /add xcode terminal", style: .input),
+            TerminalLine(text: "goal: — · apps: Xcode, Terminal · 25m", style: .dim),
+            TerminalLine(text: "focus ▸ /time 90", style: .input),
+            TerminalLine(text: "goal: — · apps: Xcode, Terminal · 90m", style: .dim),
+            TerminalLine(text: "focus ▸ /save deep work", style: .input),
+            TerminalLine(text: "/deepwork already exists", style: .warn),
+            TerminalLine(text: "focus ▸ /save reducer", style: .input),
+            TerminalLine(text: "saved /reducer — 90m · Xcode, Terminal", style: .success),
+            TerminalLine(text: "run it any time: /reducer <goal>", style: .dim),
             TerminalLine(text: "focus ▸ write the physics lab report", style: .input),
             TerminalLine(text: "goal: write the physics lab report · apps: current app · 25m", style: .dim),
             TerminalLine(text: "focus ▸ /add pages safari", style: .input),

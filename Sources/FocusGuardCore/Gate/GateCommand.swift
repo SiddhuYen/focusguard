@@ -20,6 +20,7 @@ enum GateCommand: Equatable, Sendable {
     case override
     case sleep
     case answerLastGoal(finished: Bool)
+    case save(String)
     case cancel
     case exit
     /// A real command typed without the argument it needs.
@@ -86,6 +87,8 @@ enum GateCommandParser {
             return .answerLastGoal(finished: true)
         case "n", "no":
             return .answerLastGoal(finished: false)
+        case "save":
+            return rest.isEmpty ? .needsArgument(command: "/save", hint: "a name: /save deep work") : .save(rest)
         case "c", "cancel", "clear":
             return .cancel
         case "exit", "quit":
@@ -106,7 +109,9 @@ enum GateCommandParser {
         ("/pin <url>", "allow one exact page, even on a blocked domain"),
         ("/start", "start the session (return on an empty line does too)"),
         ("/quick <goal>", "five minute open session, any app, blocklist still applies"),
-        ("/preset <name>", "start from a preset; /presets lists them"),
+        ("/<preset> [goal]", "run a saved preset by name: /deepwork ship the reducer"),
+        ("/save <name>", "save the current apps, sites and time as a preset"),
+        ("/presets", "list your presets and their commands"),
         ("/status", "today's numbers"),
         ("/override", "emergency override: reason, phrase, and a wait"),
         ("/sleep", "you're done: sleep the Mac"),
@@ -120,7 +125,8 @@ enum GateCommandParser {
     /// Command names for tab completion, without their arguments.
     static var commandNames: [String] {
         (help.map(\.command) + [testingHelp.command])
-            .filter { $0.hasPrefix("/") }
+            // "/<preset>" is a placeholder for your own presets, not a command.
+            .filter { $0.hasPrefix("/") && !$0.hasPrefix("/<") }
             .map { $0.split(separator: " ").first.map(String.init) ?? $0 }
     }
 

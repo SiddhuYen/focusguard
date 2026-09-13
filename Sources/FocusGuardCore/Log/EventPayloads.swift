@@ -95,6 +95,11 @@ struct SessionEndedPayload: EventPayload {
     var plannedEnd: Date?
     var violationCount: Int
     var additionCount: Int
+    /// The allowlist as it stood at the end, additions included, so one record says
+    /// everything the session allowed. Optional: events written before this was added
+    /// still decode.
+    var allowedBundleIDs: [String]?
+    var allowedSites: [SiteRule]?
 }
 
 struct AppsUsedSnapshotPayload: EventPayload {

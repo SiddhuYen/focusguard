@@ -627,7 +627,10 @@ enum FocusReducer {
         context: ReducerContext,
         config: FocusGuardConfig
     ) -> Session {
-        var allowed = request.allowedBundleIDs
+        // Deduplicated here, whatever path the list came from: two names can resolve to the
+        // same app, and a duplicate would inflate every "N apps" count downstream.
+        var seen = Set<String>()
+        var allowed = request.allowedBundleIDs.filter { seen.insert($0).inserted }
         if !allowed.contains(request.anchor.bundleID) { allowed.insert(request.anchor.bundleID, at: 0) }
 
         let plannedEnd: Date
@@ -770,7 +773,9 @@ enum FocusReducer {
             endedAt: endedAt,
             plannedEnd: session.plannedEnd,
             violationCount: session.violations.count,
-            additionCount: session.additions.count
+            additionCount: session.additions.count,
+            allowedBundleIDs: session.allowedBundleIDs,
+            allowedSites: session.allowedSites
         )
     }
 

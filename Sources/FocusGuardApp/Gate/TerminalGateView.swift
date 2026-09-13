@@ -253,6 +253,15 @@ struct TerminalGateView: View {
                 let entry = GateCommandParser.testingHelp
                 write("  \(entry.command.padding(toLength: 18, withPad: " ", startingAt: 0))\(entry.description)", .warn)
             }
+            let commands = sessionManager.presets.compactMap { preset in
+                PresetCommands.command(for: preset).map { (preset, $0) }
+            }
+            if !commands.isEmpty {
+                write("your presets", .banner)
+                for (preset, command) in commands {
+                    write("  \(command.padding(toLength: 18, withPad: " ", startingAt: 0))\(presetSummary(preset))", .output)
+                }
+            }
 
         case .goal(let text):
             setGoal(text)
@@ -281,8 +290,8 @@ struct TerminalGateView: View {
                 return
             }
             for preset in presets {
-                let apps = preset.allowedBundleIDs.map { sessionManager.displayName(for: $0) }.joined(separator: ", ")
-                write("  /p \(preset.name.padding(toLength: 14, withPad: " ", startingAt: 0))\(Int(preset.defaultDuration / 60))m  \(apps)", .output)
+                let command = PresetCommands.command(for: preset) ?? "/preset \(preset.name)"
+                write("  \(command.padding(toLength: 18, withPad: " ", startingAt: 0))\(presetSummary(preset))", .output)
             }
 
         case .preset(let name):
@@ -292,13 +301,21 @@ struct TerminalGateView: View {
                 write("no preset named \(name) — /presets to list them", .warn)
                 return
             }
-            draft.bundleIDs = preset.allowedBundleIDs
-            draft.sites = preset.allowedSites
-            draft.minutes = Int(preset.defaultDuration / 60)
-            draft.presetID = preset.id
-            if draft.goal.isEmpty { draft.goal = preset.name }
-            write("preset \(preset.name)", .output)
-            startFullSession()
+            runPreset(preset, goal: nil)
+
+        case .save(let name):
+            if let problem = sessionManager.savePreset(
+                named: name,
+                bundleIDs: draft.bundleIDs,
+                sites: draft.sites,
+                minutes: draft.minutes,
+                goal: draft.goal
+            ) {
+                write(problem, .warn)
+            } else if let saved = sessionManager.presets.first(where: { PresetCommands.slug($0.name) == PresetCommands.slug(name) }) {
+                write("saved \(PresetCommands.command(for: saved) ?? name) — \(presetSummary(saved))", .success)
+                write("run it any time: \(PresetCommands.command(for: saved) ?? "/preset \(name)") <goal>", .dim)
+            }
 
         case .add(let names):
             addApps(names, replacing: false)
@@ -371,7 +388,11 @@ struct TerminalGateView: View {
             write("\(command) needs \(hint)", .warn)
 
         case .unknown(let text):
-            write("\(text): no such command — /help", .warn)
+            if let match = PresetCommands.resolve(text, presets: sessionManager.presets) {
+                runPreset(match.preset, goal: match.goal)
+            } else {
+                write("\(text): no such command — /help", .warn)
+            }
 
         case .text, .answerLastGoal:
             break
@@ -408,6 +429,27 @@ struct TerminalGateView: View {
             write("or /sites alone to allow everything that isn't blocked", .dim)
         }
         writeDraft()
+    }
+
+    /// Runs a preset. Presets supply apps, sites and a length; the goal is whatever you typed
+    /// after the command, falling back to the preset's name (3.3).
+    private func runPreset(_ preset: Preset, goal: String?) {
+        draft.bundleIDs = preset.allowedBundleIDs
+        draft.sites = preset.allowedSites
+        draft.minutes = Int(preset.defaultDuration / 60)
+        draft.presetID = preset.id
+        if let goal {
+            draft.goal = goal
+        } else if draft.goal.isEmpty {
+            draft.goal = preset.name
+        }
+        write("preset \(preset.name)", .output)
+        startFullSession()
+    }
+
+    private func presetSummary(_ preset: Preset) -> String {
+        let apps = preset.allowedBundleIDs.map { sessionManager.displayName(for: $0) }.joined(separator: ", ")
+        return "\(Int(preset.defaultDuration / 60))m · \(apps.isEmpty ? "no apps" : apps)"
     }
 
     private func printStatus() {
@@ -526,7 +568,7 @@ struct TerminalGateView: View {
         let verb = words.first?.lowercased() ?? ""
         let candidates: [String]
         if partial.hasPrefix("/") {
-            candidates = GateCommandParser.commandNames
+            candidates = GateCommandParser.commandNames + sessionManager.presets.compactMap(PresetCommands.command(for:))
         } else if ["/add", "/a", "/apps", "/app"].contains(verb) {
             candidates = sessionManager.pickerApps.map { $0.name.replacingOccurrences(of: " ", with: "") }
         } else if ["/preset", "/p"].contains(verb) {
