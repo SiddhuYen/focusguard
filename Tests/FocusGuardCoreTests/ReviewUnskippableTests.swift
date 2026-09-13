@@ -26,12 +26,12 @@ struct ReviewUnskippableTests {
         FocusReducer.reduce(inSession(), .tick(idleSeconds: 0), context: context(25 * 60 + 1))
     }
 
-    @Test("Time running out covers the screen the way the gate does")
-    func timeUpLocksTheScreen() {
+    @Test("Time running out shows the review without forcing kiosk or a Space switch")
+    func timeUpShowsReviewInPlace() {
         let (state, effects) = timedOut()
         guard case .review = state.phase else { Issue.record("expected the review"); return }
         #expect(effects.contains { if case .showReview = $0 { return true } else { return false } })
-        #expect(effects.contains(.setKiosk(true)))
+        #expect(!effects.contains(.setKiosk(true)), "kiosk would activate the app and yank you out of a full-screen Space")
     }
 
     @Test("Switching to another app during the review brings it straight back")
@@ -48,22 +48,22 @@ struct ReviewUnskippableTests {
         let (next, effects) = FocusReducer.reduce(review, .reviewExtended(by: 10 * 60), context: context(25 * 60 + 5))
         #expect(next.phase.isEnforcing)
         #expect(effects.contains(.dismissReview))
-        #expect(effects.contains(.setKiosk(false)))
+        #expect(!effects.contains(.setKiosk(true)))
     }
 
-    @Test("Answering goes straight to the gate without releasing kiosk in between")
-    func answerKeepsKiosk() {
+    @Test("Answering goes straight to the gate, which takes kiosk for itself")
+    func answerGoesToGate() {
         let review = timedOut().0
         let (next, effects) = FocusReducer.reduce(review, .reviewAnswered(finished: true), context: context(25 * 60 + 5))
         #expect(next.isGated)
-        #expect(!effects.contains(.setKiosk(false)), "no gap where the Mac is usable between review and gate")
         #expect(effects.contains(.setKiosk(true)))
+        #expect(!effects.contains(.setKiosk(false)))
     }
 
     @Test("Being away when time runs out still waits until you are back")
     func idleStillWaits() {
         let (state, effects) = FocusReducer.reduce(inSession(), .tick(idleSeconds: 20 * 60), context: context(25 * 60 + 1))
         if case .review = state.phase { Issue.record("no review for an empty chair") }
-        #expect(!effects.contains(.setKiosk(true)))
+        #expect(!effects.contains { if case .showReview = $0 { return true } else { return false } })
     }
 }

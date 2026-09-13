@@ -61,12 +61,12 @@ final class ShieldWindowController: NSObject {
         #endif
     }
 
-    /// Puts the shield back in front of whatever took focus.
+    /// Puts the shield back in front of whatever took focus, in the Space you are in.
     func bringToFront() {
         guard !windows.isEmpty else { return }
         for window in windows { window.orderFrontRegardless() }
-        primaryWindow?.makeKeyAndOrderFront(nil)
-        activate()
+        primaryWindow?.makeKey()
+        activateForGate()
     }
 
     func hide() {
@@ -90,20 +90,14 @@ final class ShieldWindowController: NSObject {
         isVisible ? shieldLevel : nil
     }
 
-    /// Taking focus away from whatever you are working in is the point here. Both APIs:
-    /// activate(ignoringOtherApps:) is deprecated, and the cooperative activation that
-    /// replaced it can be declined. Activation is asynchronous, so it is retried briefly.
-    private func activate(attempt: Int = 0) {
-        NSRunningApplication.current.activate(options: [.activateAllWindows])
+    /// Only the gate takes activation, because kiosk mode needs the app active. Forcing
+    /// activation while you are in a full-screen app makes macOS switch to Focus Guard's own
+    /// Space: that is what froze the screen at time-up, and a retry loop here made it
+    /// flicker. The review shows as a non-activating panel on every Space and takes the
+    /// keyboard without it. One attempt, never a loop.
+    private func activateForGate() {
+        guard case .some(.gate) = content, !NSApp.isActive else { return }
         NSApp.activate(ignoringOtherApps: true)
-        guard attempt < 5 else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.windows.isEmpty, !NSApp.isActive else { return }
-                self.primaryWindow?.makeKeyAndOrderFront(nil)
-                self.activate(attempt: attempt + 1)
-            }
-        }
     }
 
     /// Kiosk options are release-only and only while the shield is up. An invalid
@@ -137,7 +131,7 @@ final class ShieldWindowController: NSObject {
         windows = NSScreen.screens.map { screen in
             let window = ShieldWindow(
                 contentRect: screen.frame,
-                styleMask: [.borderless, .fullSizeContentView],
+                styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
@@ -188,8 +182,21 @@ final class ShieldWindowController: NSObject {
     }
 }
 
-/// Borderless windows refuse key status by default, and the gate and review take typing.
-private final class ShieldWindow: NSWindow {
+/// A borderless, non-activating panel: it joins whatever Space you are in, full-screen apps
+/// included, and still becomes key so the gate and review can take typing.
+private final class ShieldWindow: NSPanel {
+    override init(
+        contentRect: NSRect,
+        styleMask style: NSWindow.StyleMask,
+        backing backingStoreType: NSWindow.BackingStoreType,
+        defer flag: Bool
+    ) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        isFloatingPanel = true
+        becomesKeyOnlyIfNeeded = false
+        hidesOnDeactivate = false
+    }
+
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeMain: Bool { false }
 }

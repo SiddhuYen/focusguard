@@ -82,6 +82,13 @@ enum SelfCheck {
         manager.send(.appActivated(stray))
         check("stray app intervenes", isIntervening(manager))
         check("intervention panel is on screen", panelCount(minWidth: 500) >= 1, "\(panelCount(minWidth: 500)) panels")
+        check("the intervention joins the current Space instead of pulling you to the desktop",
+              NSApp.windows.contains { window in
+                  window.isVisible && window is NSPanel && window.frame.width >= 500
+                      && window.styleMask.contains(.nonactivatingPanel)
+                      && window.collectionBehavior.contains(.fullScreenAuxiliary)
+                      && window.collectionBehavior.contains(.canJoinAllSpaces)
+              })
         check("violation logged", loggedTypes().contains(.violation))
 
         // 4. Return, then add-to-session with a reason.
@@ -100,6 +107,12 @@ enum SelfCheck {
         check("time up opens the review", isReviewing(manager))
         check("the review covers every display", shieldCount() == NSScreen.screens.count,
               "\(shieldCount()) of \(NSScreen.screens.count)")
+        check("the review joins every Space, full-screen apps included, without activating",
+              !shieldWindows().isEmpty && shieldWindows().allSatisfy { window in
+                  window.styleMask.contains(.nonactivatingPanel)
+                      && window.collectionBehavior.contains(.fullScreenAuxiliary)
+                      && window.collectionBehavior.contains(.canJoinAllSpaces)
+              })
         effects = []
         manager.send(.appActivated(stray))
         check("switching apps during the review pulls it straight back",

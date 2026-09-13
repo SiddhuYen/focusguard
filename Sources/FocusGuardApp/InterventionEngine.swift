@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class InterventionEngine {
-    private var window: NSPanel?
+    private var window: FloatingPanel?
     private var delegate: InterventionWindowDelegate?
 
     func present(
@@ -32,7 +32,9 @@ final class InterventionEngine {
         var height: CGFloat = 340
         if !permissions.isHealthy { height += 56 }
 
-        let panel = NSPanel(
+        // Non-activating, so it appears over the app you just switched to, full screen
+        // included, instead of pulling you back to the desktop Space.
+        let panel = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: height),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
@@ -43,16 +45,12 @@ final class InterventionEngine {
         panel.title = "Focus Guard"
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.level = .modalPanel
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.delegate = delegate
         panel.contentView = NSHostingView(rootView: view)
         panel.center()
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        panel.present()
 
         window = panel
         self.delegate = delegate
@@ -61,8 +59,7 @@ final class InterventionEngine {
     func bringToFront() {
         guard let window else { return }
         window.level = .modalPanel
-        window.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        window.present()
     }
 
     func dismiss() {

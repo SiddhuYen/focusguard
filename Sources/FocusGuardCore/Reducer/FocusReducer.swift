@@ -468,13 +468,12 @@ enum FocusReducer {
             }
         case (.review, _):
             effects.append(.dismissReview)
-            // Back to work releases kiosk. Going on to the gate keeps it, through the gate's
-            // own effects, so there is no moment where the Mac is usable in between.
-            if !new.isGate { effects.append(.setKiosk(false)) }
         case (_, .review(let session, let reason)):
+            // No kiosk here. Kiosk needs Focus Guard active, and activating mid-work pulls you
+            // out of a full-screen app into another Space, which froze the screen at time-up.
+            // The review stays unskippable by covering every Space and taking focus back on
+            // any app switch.
             effects.append(.showReview(session, reason))
-            // As unskippable as the gate: the same shield, and kiosk in release builds.
-            effects.append(.setKiosk(true))
         default:
             break
         }
